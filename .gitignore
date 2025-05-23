@@ -55,10 +55,7 @@ Examples_old/ROS/ORB_SLAM3/Stereo_Inertial_old
 Examples_old/ROS/ORB_SLAM3/CMakeLists.txt.user
 Examples_old/ROS/ORB_SLAM3/build/
 
-KeyFrameTrajectory.txt
-CameraTrajectory.txt
-kf_*.txt
-f_*.txt
+
 Thirdparty/DBoW2/build/
 Thirdparty/DBoW2/lib/
 Thirdparty/g2o/build/
