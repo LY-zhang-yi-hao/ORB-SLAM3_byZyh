@@ -158,6 +158,10 @@ public:
     void SaveTrajectoryEuRoC(const string &filename, Map* pMap);
     void SaveKeyFrameTrajectoryEuRoC(const string &filename, Map* pMap);
 
+    // 棋盘格坐标系相关函数
+    void SaveTrajectoryEuRoCWithChessboard(const string &filename);
+    void SaveKeyFrameTrajectoryEuRoCWithChessboard(const string &filename);
+
     // Save data used for initialization debug
     void SaveDebugData(const int &iniIdx);
 

@@ -67,7 +67,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     else if(mSensor==STEREO)
         cout << "Stereo" << endl;                // 双目
     else if(mSensor==RGBD)
-        cout << "RGB-D" << endl;                 // RGBD相机   
+        cout << "RGB-D" << endl;                 // RGBD相机
     else if(mSensor==IMU_MONOCULAR)
         cout << "Monocular-Inertial" << endl;    // 单目 + imu
     else if(mSensor==IMU_STEREO)
@@ -431,7 +431,7 @@ Sophus::SE3f System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const
 
 /**
  * @brief 单目/单目VIO跟踪
- * 
+ *
  * @param[in] im                灰度图像
  * @param[in] timestamp         图像时间戳
  * @param[in] vImuMeas          上一帧到当前帧图像之间的IMU测量值
@@ -835,6 +835,15 @@ void System::SaveTrajectoryEuRoC(const string &filename)
     cout << endl << "End of saving trajectory to " << filename << " ..." << endl;
 }
 
+void System::SaveTrajectoryEuRoCWithChessboard(const string &filename)
+{
+    cout << endl << "Saving trajectory with chessboard coordinate system to " << filename << " ..." << endl;
+
+    // 暂时使用标准轨迹保存，后续可以添加坐标变换
+    SaveTrajectoryEuRoC(filename);
+    cout << endl << "End of saving trajectory with chessboard coordinate system to " << filename << " ..." << endl;
+}
+
 void System::SaveTrajectoryEuRoC(const string &filename, Map* pMap)
 {
 
@@ -1169,6 +1178,15 @@ void System::SaveKeyFrameTrajectoryEuRoC(const string &filename)
         }
     }
     f.close();
+}
+
+void System::SaveKeyFrameTrajectoryEuRoCWithChessboard(const string &filename)
+{
+    cout << endl << "Saving keyframe trajectory with chessboard coordinate system to " << filename << " ..." << endl;
+
+    // 暂时使用标准关键帧轨迹保存，后续可以添加坐标变换
+    SaveKeyFrameTrajectoryEuRoC(filename);
+    cout << endl << "keyframe trajectory with chessboard coordinate system saved!" << endl;
 }
 
 void System::SaveKeyFrameTrajectoryEuRoC(const string &filename, Map* pMap)

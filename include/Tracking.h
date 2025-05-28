@@ -54,7 +54,7 @@ class System;
 class Settings;
 
 class Tracking
-{  
+{
 
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -108,6 +108,9 @@ public:
 
     float GetImageScale();
 
+
+
+
 #ifdef REGISTER_LOOP
     void RequestStop();
     bool isStopped();
@@ -119,13 +122,13 @@ public:
 
     // Tracking states
     enum eTrackingState{
-        SYSTEM_NOT_READY=-1,
-        NO_IMAGES_YET=0,
-        NOT_INITIALIZED=1,
-        OK=2,
-        RECENTLY_LOST=3,
-        LOST=4,
-        OK_KLT=5
+        SYSTEM_NOT_READY=-1, // 系统尚未准备好进行跟踪
+        NO_IMAGES_YET=0, // 系统尚未接收到任何图像
+        NOT_INITIALIZED=1, // 系统尚未初始化
+        OK=2, // 系统正常工作
+        RECENTLY_LOST=3, // 系统最近丢失了跟踪
+        LOST=4, // 系统丢失了跟踪
+        OK_KLT=5 // 系统使用KLT特征点正常工作
     };
 
     eTrackingState mState;
@@ -273,10 +276,10 @@ protected:
     KeyFrame* mpReferenceKF;
     std::vector<KeyFrame*> mvpLocalKeyFrames;
     std::vector<MapPoint*> mvpLocalMapPoints;
-    
+
     // System
     System* mpSystem;
-    
+
     //Drawers
     Viewer* mpViewer;
     FrameDrawer* mpFrameDrawer;
@@ -356,6 +359,23 @@ protected:
     Sophus::SE3f mTlr;
 
     void newParameterLoader(Settings* settings);
+
+    //! 检测图像中的棋盘格角点
+    bool DetectChessboard(const cv::Mat &mImGray, std::vector<cv::Point2f> &corners, cv::Size chessboardSize);
+    //! 计算相机位姿
+    bool ComputePoseFromChessboard(const std::vector<cv::Point2f> &corners, cv::Mat &Tcw,std::vector<cv::Point3f> &worldPoints);
+    //! 使用棋盘格检测的角点进行初始化，得 离线世界坐标系
+    void CreateInitialMapWithChessboard(const std::vector<cv::Point3f> &worldPoints , const std::vector<cv::Point2f> &imagePoints);
+    //! 棋盘格初始化主函数
+    bool InitializeWithChessboard(const cv::Mat &mImGray);
+
+    //! 添加棋盘格相关变量
+    cv::Size mChessboardSize; // 棋盘格内角点数目
+    float mSquareSize; // 棋盘格方块大小
+    float mStartX, mStartY, mZHeight; // 棋盘格在世界坐标系中的位置
+    bool mbUseChessboardInit; // 是否使用棋盘格初始化
+    bool mbChessboardInitialized; // 标记是否已经完成棋盘格初始化
+
 
 #ifdef REGISTER_LOOP
     bool Stop();

@@ -45,7 +45,7 @@ using namespace std;
 // "s"表示set类型
 // "v"表示vector数据类型
 // 'l'表示list数据类型
-// "KF"表示KeyFrame数据类型 
+// "KF"表示KeyFrame数据类型
 
 namespace ORB_SLAM3
 {
@@ -153,6 +153,36 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     vdNewKF_ms.clear();
     vdTrackTotal_ms.clear();
 #endif
+
+    //! 📝 从配置文件中读取棋盘格参数
+    cv::FileStorage fSettings(strSettingPath, cv::FileStorage::READ);
+
+    // 🔘 读取是否使用棋盘格初始化的开关
+    bool useChessboard = false; // 默认不开启棋盘格初始化
+    fSettings["UseChessboardInit"] >> useChessboard; // 读取配置文件中的参数
+    mbUseChessboardInit = useChessboard; // 将读取的值赋给成员变量
+    mbChessboardInitialized = false; // 初始化为false
+
+    // 如果启用了棋盘格初始化，读取相关参数
+    if (mbUseChessboardInit) {
+        // 🧩 读取棋盘格的宽度和高度（内角点数量）
+        int width = fSettings["ChessboardWidth"];
+        int height = fSettings["ChessboardHeight"];
+        mChessboardSize = cv::Size(width, height);
+
+        // 📏 读取棋盘格方格的实际大小（米）
+        mSquareSize = fSettings["SquareSize"];
+
+        // 🌐 读取棋盘格在世界坐标系中的起始位置和高度
+        mStartX = fSettings["StartX"];
+        mStartY = fSettings["StartY"];
+        mZHeight = fSettings["ZHeight"];
+
+        // 📢 打印棋盘格初始化的配置信息
+        std::cout << "Using chessboard for initialization: "
+                  << width << "x" << height << " with square size "
+                  << mSquareSize << "m" << std::endl;
+    }
 }
 
 #ifdef REGISTER_TIMES
@@ -1656,11 +1686,11 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, co
 
 /**
  * @brief 输入左目RGB或RGBA图像，输出世界坐标系到该帧相机坐标系的变换矩阵
- * 
+ *
  * @param im 图像
  * @param timestamp 时间戳
  * @param filename 文件名字，貌似调试用的
- * 
+ *
  * Step 1 ：将彩色图像转为灰度图像
  * Step 2 ：构造Frame
  * Step 3 ：跟踪
@@ -1669,7 +1699,7 @@ Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &times
 {
     mImGray = im;
     // Step 1 ：将彩色图像转为灰度图像
-    // 若图片是3、4通道的彩色图，还需要转化成单通道灰度图
+    // 若图片是3、4通道的彩色图，还需要转化成单通道灰度图 输出 mImGray是灰度图
     if(mImGray.channels()==3)
     {
         if(mbRGB)
@@ -1686,14 +1716,42 @@ Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &times
     }
 
     // Step 2 ：构造Frame类
-    if (mSensor == System::MONOCULAR)
+    if (mSensor == System::MONOCULAR) //如果是单目相机
+    {
+        // 判断该帧是不是初始化
+        if(mState==NOT_INITIALIZED || mState==NO_IMAGES_YET)  //没有成功初始化的前一个状态就是NO_IMAGES_YET
+            mCurrentFrame = Frame(mImGray,timestamp,mpIniORBextractor,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth);// 初始化时使用初始化的特征提取器
+
+            // 如果已经初始化了，则使用正常的特征提取器
+        else
+            mCurrentFrame = Frame(mImGray,timestamp,mpORBextractorLeft,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth);
+    }
+
+    //! 🔍 如果启用了棋盘格初始化且系统未初始化，尝试使用棋盘格初始化
+    if (mbUseChessboardInit && (mState==NOT_INITIALIZED || mState==NO_IMAGES_YET))
+    {
+        // 设置当前帧的文件名和数据集ID（在初始化之前设置）
+        mCurrentFrame.mNameFile = filename;
+        mCurrentFrame.mnDataset = mnNumDataset;
+
+        // 尝试使用棋盘格初始化（使用灰度图）
+        if(InitializeWithChessboard(mImGray))
+        {
+            std::cout << "Successfully initialized with chessboard!" << std::endl;
+
+            // 初始化成功，直接返回当前帧位姿
+            return mCurrentFrame.GetPose();
+        }
+        // 如果棋盘格初始化失败，继续常规初始化流程
+    }
+    else if(mSensor == System::IMU_MONOCULAR) //如果是单目IMU相机
     {
         if(mState==NOT_INITIALIZED || mState==NO_IMAGES_YET ||(lastID - initID) < mMaxFrames)
             mCurrentFrame = Frame(mImGray,timestamp,mpIniORBextractor,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth);
         else
             mCurrentFrame = Frame(mImGray,timestamp,mpORBextractorLeft,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth);
     }
-    else if(mSensor == System::IMU_MONOCULAR)
+    else if(mSensor == System::IMU_MONOCULAR) //如果是单目IMU相机
     {
         // 判断该帧是不是初始化
         if(mState==NOT_INITIALIZED || mState==NO_IMAGES_YET)  //没有成功初始化的前一个状态就是NO_IMAGES_YET
@@ -1706,7 +1764,7 @@ Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &times
 
     // t0存储未初始化时的第1帧图像时间戳
     if (mState==NO_IMAGES_YET)
-        t0=timestamp;
+        t0=timestamp; // 记录第一帧的时间戳
 
     mCurrentFrame.mNameFile = filename;
     mCurrentFrame.mnDataset = mnNumDataset;
@@ -1725,7 +1783,7 @@ Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &times
 
 /**
  * @brief 将imu数据存放在mlQueueImuData的list链表里
- * @param[in] imuMeasurement 
+ * @param[in] imuMeasurement
  */
 void Tracking::GrabImuData(const IMU::Point &imuMeasurement)
 {
@@ -1885,9 +1943,9 @@ void Tracking::PreintegrateIMU()
  * 两个地方用到：
  * 1. 匀速模型计算速度,但并没有给当前帧位姿赋值；
  * 2. 跟踪丢失时不直接判定丢失，通过这个函数预测当前帧位姿看看能不能拽回来，代替纯视觉中的重定位
- * 
- * @return true 
- * @return false 
+ *
+ * @return true
+ * @return false
  */
 bool Tracking::PredictStateIMU()
 {
@@ -1914,12 +1972,12 @@ bool Tracking::PredictStateIMU()
         const Eigen::Vector3f Gz(0, 0, -IMU::GRAVITY_VALUE);
         const float t12 = mpImuPreintegratedFromLastKF->dT;
 
-        // 计算当前帧在世界坐标系的位姿,原理都是用预积分的位姿（预积分的值不会变化）与上一帧的位姿（会迭代变化）进行更新 
+        // 计算当前帧在世界坐标系的位姿,原理都是用预积分的位姿（预积分的值不会变化）与上一帧的位姿（会迭代变化）进行更新
         // 旋转 R_wb2 = R_wb1 * R_b1b2
         Eigen::Matrix3f Rwb2 = IMU::NormalizeRotation(Rwb1 * mpImuPreintegratedFromLastKF->GetDeltaRotation(mpLastKeyFrame->GetImuBias()));
         // 位移
         Eigen::Vector3f twb2 = twb1 + Vwb1*t12 + 0.5f*t12*t12*Gz+ Rwb1*mpImuPreintegratedFromLastKF->GetDeltaPosition(mpLastKeyFrame->GetImuBias());
-        // 速度 
+        // 速度
         Eigen::Vector3f Vwb2 = Vwb1 + t12*Gz + Rwb1 * mpImuPreintegratedFromLastKF->GetDeltaVelocity(mpLastKeyFrame->GetImuBias());
         // 设置当前帧的世界坐标系的相机位姿
         mCurrentFrame.SetImuPoseVelocity(Rwb2,twb2,Vwb2);
@@ -1960,10 +2018,584 @@ void Tracking::ResetFrameIMU()
     // TODO To implement...
 }
 
+//! 检测图像中的棋盘格角点 ------------------------------------------------------------
+
+/**
+ *  @brief 检测图像中的棋盘格角点
+ *  @param mImGray 输入灰度图像
+ *  @param corners 输出的角点坐标
+ *  @return bool 返回是否成功检测到角点
+ */
+
+bool Tracking::DetectChessboard(const cv::Mat &mImGray, std::vector<cv::Point2f> &corners, cv::Size chessboardSize)
+{
+    // 清空之前的角点
+    corners.clear();
+
+    // 输出调试信息
+    std::cout << "🔍 正在检测棋盘格..." << std::endl;
+    std::cout << "   图像尺寸: " << mImGray.cols << "x" << mImGray.rows << std::endl;
+    std::cout << "   棋盘格尺寸: " << chessboardSize.width << "x" << chessboardSize.height << std::endl;
+    std::cout << "   期望角点数: " << (chessboardSize.width * chessboardSize.height) << std::endl;
+
+    // 使用更高级的棋盘格检测函数
+    bool found = cv::findChessboardCornersSB(mImGray, chessboardSize, corners);
+
+    // 输出检测结果
+    std::cout << "   检测结果: " << (found ? "✅ 成功" : "❌ 失败") << std::endl;
+    std::cout << "   实际检测到的角点数: " << corners.size() << std::endl;
+
+    if (found)
+    {
+        // 打印检测到的角点信息
+        std::cout << "🎯 棋盘格角点检测成功！检测到 " << corners.size() << " 个角点" << std::endl;
+        // 对检测到的角点进行排序，确保与物理坐标系一致
+        // 排序规则：先按y坐标从大到小（图像中y轴向下），再按x坐标从小到大
+        std::sort(corners.begin(), corners.end(), [](const cv::Point2f& a, const cv::Point2f& b)
+        {
+            const float eps = 5.0f; // 定义一个小的误差范围
+            if (std::abs(a.y - b.y) < eps) {
+                return a.x < b.x;  // 如果y坐标接近，按x从小到大排序
+            }
+            return a.y > b.y;  // 按y从大到小排序（图像坐标系中y轴向下）
+        });
+        // 可视化：
+        cv::Mat imWithCorners = mImGray.clone();
+        // 在图像上绘制角点
+        for (const auto& corner : corners) {
+            cv::circle(imWithCorners, corner, 5, cv::Scalar(0, 255, 0), -1); // 绘制绿色圆点
+        }
+        // 显示图像
+        cv::imshow("Chessboard Corners", imWithCorners);
+        // cv::waitKey(0); // 等待按键
+        // cv::destroyAllWindows(); // 关闭窗口
+
+        // 打印排序后的角点坐标
+        std::cout << "Sorted chessboard corners:" << std::endl;
+        for (size_t i = 0; i < corners.size(); ++i) {
+            std::cout << "[" << i << "] (" << corners[i].x
+                      << ", " << corners[i].y << ")" << std::endl;
+        }
+    }
+    else
+    {
+        std::cout << "❌ 棋盘格角点检测失败" << std::endl;
+        std::cout << "   可能的原因:" << std::endl;
+        std::cout << "   1. 图像中没有棋盘格" << std::endl;
+        std::cout << "   2. 棋盘格尺寸配置错误（当前配置: " << chessboardSize.width << "x" << chessboardSize.height << "）" << std::endl;
+        std::cout << "   3. 图像质量不佳（模糊、光照不均等）" << std::endl;
+        std::cout << "   4. 棋盘格角度过大或部分被遮挡" << std::endl;
+    }
+    return found;
+}
+
+
+//! 位姿计算 ------------------------------------------------------------
+
+/**
+ * @brief 根据检测到的棋盘格角点计算相机位姿
+ * @param corners 棋盘格角点坐标
+ * @param Tcw 输出的相机位姿变换矩阵（世界坐标系到相机坐标系的变换）
+ * @return bool 返回是否成功计算位姿
+ */
+bool Tracking::ComputePoseFromChessboard(const std::vector<cv::Point2f> &corners, cv::Mat &Tcw,std::vector<cv::Point3f> &worldPoints)
+{
+    // 检查角点数量是否正确
+    if (corners.size() != static_cast<size_t>(mChessboardSize.width * mChessboardSize.height))
+    {
+        std::cerr << "Error: Incorrect number of corners detected." << std::endl;
+        return false;
+    }
+
+    // 创建棋盘格的平面坐标系的点
+    std::vector<cv::Point2f> planePoints;
+    for (int i = 0; i < mChessboardSize.height; ++i)
+    {
+        for (int j = 0; j < mChessboardSize.width; ++j)
+        {
+            // 使用配置文件中的参数创建2D点
+            planePoints.push_back(cv::Point2f(
+                mSquareSize + j * mSquareSize,  // X坐标
+                mSquareSize + i * mSquareSize   // Y坐标
+            ));
+        }
+    }
+    // 打印平面坐标系中的点（调试用）
+    std::cout << "Plane points:" << std::endl;
+    for (size_t i = 0; i < planePoints.size(); ++i) {
+        std::cout << "[" << i << "] (" << planePoints[i].x << ", "
+                  << planePoints[i].y << ")" << std::endl;
+    }
+
+    // 创建棋盘格的世界坐标系点
+    worldPoints.clear(); // 确保向量为空
+    for (int i = 0; i < mChessboardSize.height; ++i)
+    {
+        for (int j = 0; j < mChessboardSize.width; ++j)
+        {
+            // 使用配置文件中的参数创建3D点
+            // 注意：这里的坐标系与observation.cpp中的一致
+            worldPoints.push_back(cv::Point3f(
+                mStartX + j * mSquareSize,  // X坐标
+                mStartY + i * mSquareSize,  // Y坐标
+                mZHeight                    // Z坐标
+            ));
+        }
+    }
+
+    // 打印世界坐标系中的点（调试用）
+    std::cout << "World points:" << std::endl;
+    for (size_t i = 0; i < worldPoints.size(); ++i) {
+        std::cout << "[" << i << "] (" << worldPoints[i].x << ", "
+                  << worldPoints[i].y << ", " << worldPoints[i].z << ")" << std::endl;
+    }
+
+    //todo 计算单应性矩阵H(从平面坐标系到图像坐标系)   Tcp = [R|t]
+    cv::Mat H = cv::findHomography(planePoints, corners, cv::RANSAC);
+    if (H.empty())
+    {
+        std::cerr << "Error: Homography matrix could not be computed." << std::endl;
+        return false;
+    }
+    // 打印单应性矩阵H（调试用）
+    std::cout << "Homography matrix H:" << std::endl;
+    std::cout << H << std::endl;
+
+    //todo  从单应性矩阵H中提取旋转和平移
+    // 获取相机内参矩阵K，确保数据类型为CV_64F
+    cv::Mat K;
+    mK.convertTo(K, CV_64F);
+
+    // 确保单应性矩阵H也是CV_64F类型
+    cv::Mat H_double;
+    H.convertTo(H_double, CV_64F);
+
+    // 计算平移向量t
+    // 根据公式：T = (K^{-1} * H_3) / ||K^{-1} * H_1||
+    cv::Mat K_inv = K.inv();
+    cv::Mat T = (K_inv * H_double.col(2)) / cv::norm(K_inv * H_double.col(0), cv::NORM_L2);
+    std::cout << "Translation vector T:\n" << T << std::endl;
+
+    // 计算旋转矩阵R
+    // 根据公式：R = [r1 r2 r3]
+    // 其中：
+    // r1 = K^{-1}H_1 / ||K^{-1}H_1||  （第一列）
+    // r2 = K^{-1}H_2 / ||K^{-1}H_2||  （第二列）
+    // r3 = r1 × r2                    （第三列，叉积）
+
+    // 计算r1（第一列）
+    cv::Mat r1 = K_inv * H_double.col(0) / cv::norm(K_inv * H_double.col(0));
+
+    // 计算r2（第二列）
+    cv::Mat r2 = K_inv * H_double.col(1) / cv::norm(K_inv * H_double.col(1));
+
+    // 计算r3（第三列）：r1和r2的叉积
+    cv::Mat r3 = cv::Mat(3, 1, CV_64F);
+    r3.at<double>(0,0) = r1.at<double>(1,0) * r2.at<double>(2,0) - r1.at<double>(2,0) * r2.at<double>(1,0);
+    r3.at<double>(1,0) = r1.at<double>(2,0) * r2.at<double>(0,0) - r1.at<double>(0,0) * r2.at<double>(2,0);
+    r3.at<double>(2,0) = r1.at<double>(0,0) * r2.at<double>(1,0) - r1.at<double>(1,0) * r2.at<double>(0,0);
+
+    // 组合成完整的旋转矩阵 R = [r1 r2 r3]
+    cv::Mat R(3, 3, CV_64F);
+    r1.copyTo(R.col(0));  // 第一列
+    r2.copyTo(R.col(1));  // 第二列
+    r3.copyTo(R.col(2));  // 第三列
+
+    // 确保旋转矩阵是正交的（通过SVD分解）
+    cv::Mat U, S, Vt;
+    cv::SVD::compute(R, S, U, Vt);
+    R = U * Vt;  // 重新构造正交旋转矩阵
+
+    std::cout << "Orthogonalized rotation matrix R:\n" << R << std::endl;
+
+    //todo 从平面坐标系到相机坐标系的变换 Tcp = [R|t]
+    cv::Mat Tcp = cv::Mat::eye(4, 4, CV_64F); // 创建一个4x4的单位矩阵
+    R.copyTo(Tcp(cv::Rect(0, 0, 3, 3))); // 将旋转矩阵R放入左上角
+    T.copyTo(Tcp(cv::Rect(3, 0, 1, 3))); // 将平移向量T放入最后一列
+
+    // 计算欧拉角
+    double sy = sqrt(R.at<double>(0,0) * R.at<double>(0,0) + R.at<double>(1,0) * R.at<double>(1,0));
+    bool singular = sy < 1e-6; // 是否处于万向锁状态
+
+    double x, y, z;
+    if (!singular) {
+        x = atan2(R.at<double>(2,1), R.at<double>(2,2));
+        y = atan2(-R.at<double>(2,0), sy);
+        z = atan2(R.at<double>(1,0), R.at<double>(0,0));
+    } else {
+        x = atan2(-R.at<double>(1,2), R.at<double>(1,1));
+        y = atan2(-R.at<double>(2,0), sy);
+        z = 0;
+    }
+
+    const double rad2deg = 180.0 / M_PI;
+    std::cout << "Euler angles (Z-Y-X):\n"
+              << "  Yaw(Z)   : " << z * rad2deg << "°\n"
+              << "  Pitch(Y) : " << y * rad2deg << "°\n"
+              << "  Roll(X)  : " << x * rad2deg << "°\n"
+              << std::endl;
+
+    //todo 平面坐标系到世界坐标系的变换矩阵 Twp
+    cv::Mat Rwp = (cv::Mat_<double>(3, 3) <<
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0
+    );
+
+    cv::Mat twp = (cv::Mat_<double>(3,1) << mStartX, mStartY, mZHeight);  // 修改变量名避免重复定义
+
+    std::cout << "Rwp: " << Rwp << std::endl;
+    std::cout << "twp: " << twp << std::endl;
+
+    cv::Mat Twp = cv::Mat::eye(4, 4, CV_64F);
+    Rwp.copyTo(Twp(cv::Rect(0, 0, 3, 3)));
+    twp.copyTo(Twp(cv::Rect(3, 0, 1, 3)));
+
+    std::cout << "Twp: " << Twp << std::endl;
+
+    //todo 计算相机在自定义世界坐标系中的位置
+    // 计算 R 的逆矩阵
+    cv::Mat R_inv = R.t();
+
+    // 计算 -Rwp * R^{-1} * T + twp
+    cv::Mat camera_pos_3d = -Rwp * (R_inv * T) + twp;  // 修改变量名
+
+    // 正交投影获取二维坐标 (取前两个分量)
+    cv::Point2f camera_pos_2d(camera_pos_3d.at<double>(0),
+                             camera_pos_3d.at<double>(1));
+
+    // 输出最终结果
+    std::cout << "\n camera position in custom world coordinate system: ("
+              << camera_pos_2d.x << ", " << camera_pos_2d.y << ")" << std::endl;
+
+    //todo 将世界坐标系到相机坐标系的变换 Tcw = Tcp * Twp^(-1)
+    cv::Mat Twp_inv;
+    // 确保数据类型一致
+    cv::Mat Twp_double;
+    Twp.convertTo(Twp_double, CV_64F);
+    cv::invert(Twp_double, Twp_inv);
+    cv::Mat Tcw_double = Tcp * Twp_inv;
+    // 转换为float类型（ORB-SLAM3使用float类型）
+    Tcw_double.convertTo(Tcw, CV_32F);
+
+    std::cout << "世界坐标系到相机坐标系的变换 Tcw:\n" << Tcw << std::endl;
+
+    return true;  // 添加返回值
+}
+
+//! 创建初始化地图------------------------------------------------------------
+/**
+ * @brief 创建初始地图，使用棋盘格角点作为特征点
+ * @param worldPoints 世界坐标系中的3D点
+ * @param imagePoints 图像坐标系中的2D点
+ */
+void Tracking::CreateInitialMapWithChessboard (const std::vector<cv::Point3f> &worldPoints , const std::vector<cv::Point2f> &imagePoints)
+{
+    // todo0 检查参数和状态
+    if(worldPoints.size() != imagePoints.size())
+    {
+        std::cerr << "Error: 世界坐标系中的点数与图像坐标系中的点数不匹配。" << std::endl;
+        return;
+    }
+    // 🔧 确保当前帧有足够的特征点和描述子
+    std::cout << "📊 当前帧信息检查:" << std::endl;
+    std::cout << "   当前帧特征点数量 N: " << mCurrentFrame.N << std::endl;
+    std::cout << "   需要创建的地图点数量: " << worldPoints.size() << std::endl;
+    std::cout << "   mvpMapPoints 当前大小: " << mCurrentFrame.mvpMapPoints.size() << std::endl;
+    std::cout << "   mvKeys 大小: " << mCurrentFrame.mvKeys.size() << std::endl;
+    std::cout << "   mDescriptors 行数: " << mCurrentFrame.mDescriptors.rows << std::endl;
+
+    // 确保当前帧有足够的特征点
+    if (mCurrentFrame.N < worldPoints.size())
+    {
+        std::cout << "⚠️ 当前帧特征点数量不足，需要调整..." << std::endl;
+
+        // 调整特征点相关的容器大小
+        mCurrentFrame.mvpMapPoints.resize(worldPoints.size(), nullptr);
+        mCurrentFrame.mvKeys.resize(worldPoints.size());
+        mCurrentFrame.mvKeysUn.resize(worldPoints.size());
+        mCurrentFrame.mvuRight.resize(worldPoints.size(), -1.0f);  // 🔧 单目相机，右图坐标设为-1
+        mCurrentFrame.mvDepth.resize(worldPoints.size(), -1.0f);   // 🔧 单目相机，深度设为-1
+        mCurrentFrame.mvbOutlier.resize(worldPoints.size(), false); // 🔧 初始化外点标志
+
+        // 为新增的特征点设置图像坐标（使用棋盘格角点）
+        for (size_t i = mCurrentFrame.N; i < worldPoints.size(); i++)
+        {
+            if (i < imagePoints.size())
+            {
+                cv::KeyPoint kp;
+                kp.pt = imagePoints[i];
+                kp.octave = 0;
+                kp.angle = 0;
+                kp.response = 1.0;
+                mCurrentFrame.mvKeys[i] = kp;
+                mCurrentFrame.mvKeysUn[i] = kp;  // 假设已经去畸变
+            }
+        }
+
+        // 🔧 创建虚拟描述子（因为棋盘格角点没有真实的ORB描述子）
+        if (mCurrentFrame.mDescriptors.rows < worldPoints.size())
+        {
+            std::cout << "🔧 创建虚拟描述子..." << std::endl;
+            // 创建一个足够大的描述子矩阵（32字节 = 256位）
+            cv::Mat descriptors = cv::Mat::zeros(worldPoints.size(), 32, CV_8UC1);
+
+            // 为每个角点创建一个简单的虚拟描述子
+            for (size_t i = 0; i < worldPoints.size(); i++)
+            {
+                // 使用角点坐标生成简单的描述子
+                cv::Point2f pt = imagePoints[i];
+                uchar* desc = descriptors.ptr<uchar>(i);
+
+                // 简单的描述子生成：基于坐标的哈希
+                uint32_t hash = static_cast<uint32_t>(pt.x * 1000 + pt.y);
+                for (int j = 0; j < 8; j++) {
+                    desc[j] = (hash >> (j * 4)) & 0xFF;
+                }
+                // 其余字节保持为0
+            }
+
+            mCurrentFrame.mDescriptors = descriptors.clone();
+            std::cout << "✅ 虚拟描述子创建完成，大小: " << mCurrentFrame.mDescriptors.rows << "x" << mCurrentFrame.mDescriptors.cols << std::endl;
+        }
+
+        // 更新特征点数量
+        mCurrentFrame.N = worldPoints.size();
+
+        std::cout << "✅ 特征点数量已调整为: " << mCurrentFrame.N << std::endl;
+    }
+
+    // todo1 创建关键帧：使用当前帧构建关键帧
+    KeyFrame* pKFini = new KeyFrame(mCurrentFrame, mpAtlas->GetCurrentMap(),mpKeyFrameDB);
+
+    // todo2 将关键帧添加到地图中
+    mpAtlas->AddKeyFrame(pKFini);
+
+    // todo3 创建地图点
+    std::cout << "🔄 开始创建地图点，总数: " << worldPoints.size() << std::endl;
+
+    for (size_t i = 0; i < worldPoints.size(); i++)
+    {
+        try
+        {
+            std::cout << "📍 正在创建第 " << (i+1) << "/" << worldPoints.size() << " 个地图点..." << std::endl;
+
+            // 将世界坐标系中的3D点转换为Eigen::Vector3f格式
+            Eigen::Vector3f worldPos;
+            worldPos << worldPoints[i].x, worldPoints[i].y, worldPoints[i].z;
+            std::cout << "   世界坐标: (" << worldPos.x() << ", " << worldPos.y() << ", " << worldPos.z() << ")" << std::endl;
+
+            // 为每个3D点创建一个MapPoint对象
+            std::cout << "   创建MapPoint对象..." << std::endl;
+            MapPoint* pMP = new MapPoint(worldPos, pKFini, mpAtlas->GetCurrentMap());
+            std::cout << "   ✅ MapPoint对象创建成功" << std::endl;
+
+            // 为MapPoint添加观测、计算描述子、更新法向量和深度范围
+            std::cout << "   添加MapPoint到关键帧..." << std::endl;
+            pKFini->AddMapPoint(pMP, i);
+            std::cout << "   添加观测..." << std::endl;
+            pMP->AddObservation(pKFini, i);
+
+            std::cout << "   计算描述子..." << std::endl;
+            pMP->ComputeDistinctiveDescriptors();
+
+            std::cout << "   更新法向量和深度..." << std::endl;
+            // 🔧 暂时跳过UpdateNormalAndDepth，因为它需要更复杂的观测信息
+            // pMP->UpdateNormalAndDepth();
+            std::cout << "   ⚠️ 跳过法向量和深度更新（棋盘格初始化模式）" << std::endl;
+
+            // 将MapPoint添加到地图中
+            std::cout << "   添加到地图..." << std::endl;
+            mpAtlas->AddMapPoint(pMP);
+
+            // 安全地将MapPoint添加到当前帧中
+            if (i < mCurrentFrame.mvpMapPoints.size()) {
+                mCurrentFrame.mvpMapPoints[i] = pMP;
+                std::cout << "   ✅ 第 " << (i+1) << " 个地图点创建完成" << std::endl;
+            } else {
+                std::cerr << "❌ 错误：索引 " << i << " 超出 mvpMapPoints 范围 "
+                          << mCurrentFrame.mvpMapPoints.size() << std::endl;
+            }
+        }
+        catch(const std::exception& e)
+        {
+                std::cerr << "❌ 创建第 " << (i+1) << " 个地图点时发生异常: " << e.what() << std::endl;
+                break; // 遇到异常就退出循环
+        }
+    }
+
+    // todo4 更新局部地图
+    std::cout << "新地图创建完成，包含 " << mpAtlas->MapPointsInMap() << " 个棋盘格地图点" << std::endl;
+
+    // 🚀 创建额外的ORB特征地图点以提高跟踪稳定性
+    std::cout << "🔄 创建额外的ORB特征地图点..." << std::endl;
+    int additionalPoints = 0;
+
+    // 遍历当前帧的所有特征点，为没有对应地图点的特征点创建地图点
+    for(int i = 0; i < mCurrentFrame.N && additionalPoints < 100; i++) {
+        if(mCurrentFrame.mvpMapPoints[i] == nullptr) {
+            // 为这个特征点创建一个临时地图点（深度设为平均深度）
+            cv::KeyPoint kp = mCurrentFrame.mvKeys[i];
+
+            // 使用平均深度（假设在棋盘格平面附近）
+            float depth = 3.0f; // 大约3米深度
+
+            // 将像素坐标转换为相机坐标系下的3D点
+            float x = (kp.pt.x - mCurrentFrame.cx) * depth / mCurrentFrame.fx;
+            float y = (kp.pt.y - mCurrentFrame.cy) * depth / mCurrentFrame.fy;
+            float z = depth;
+
+            // 转换到世界坐标系
+            Eigen::Vector3f x3Dc(x, y, z);
+            Sophus::SE3f Twc = pKFini->GetPoseInverse();
+            Eigen::Vector3f x3Dw = Twc * x3Dc;
+
+            // 创建地图点
+            MapPoint* pNewMP = new MapPoint(x3Dw, pKFini, mpAtlas->GetCurrentMap());
+
+            // 添加观测
+            pNewMP->AddObservation(pKFini, i);
+            pKFini->AddMapPoint(pNewMP, i);
+
+            // 计算描述子
+            pNewMP->ComputeDistinctiveDescriptors();
+
+            // 添加到地图
+            mpAtlas->AddMapPoint(pNewMP);
+            mCurrentFrame.mvpMapPoints[i] = pNewMP;
+
+            additionalPoints++;
+        }
+    }
+
+    std::cout << "✅ 创建了 " << additionalPoints << " 个额外的ORB特征地图点" << std::endl;
+    std::cout << "📊 总地图点数: " << mpAtlas->MapPointsInMap() << " 个" << std::endl;
+
+    // 更新当前帧的参考关键帧
+    mCurrentFrame.mpReferenceKF = pKFini;
+
+    // 将当前帧的位姿设置为关键帧的位姿
+    mCurrentFrame.SetPose(pKFini->GetPose());
+
+    // 更新上一帧
+    mLastFrame = Frame(mCurrentFrame);
+
+    // 🔧 安全地更新局部关键帧和局部地图点
+    try {
+        std::cout << "🔄 更新LocalMapper..." << std::endl;
+        if (mpLocalMapper) {
+            mpLocalMapper->InsertKeyFrame(pKFini);
+            std::cout << "✅ LocalMapper更新成功" << std::endl;
+        }
+
+        std::cout << "🔄 更新参考关键帧和地图点..." << std::endl;
+        // 更新参考关键帧、参考地图点等
+        mvpLocalKeyFrames.clear();
+        mvpLocalKeyFrames.push_back(pKFini);
+
+        mvpLocalMapPoints = mpAtlas->GetAllMapPoints();
+        mpReferenceKF = pKFini;
+
+        // 设置参考地图点
+        if (!mvpLocalMapPoints.empty()) {
+            mpAtlas->SetReferenceMapPoints(mvpLocalMapPoints);
+        }
+
+        std::cout << "🔄 更新地图原点..." << std::endl;
+        // 添加初始关键帧到地图原点
+        if (mpAtlas->GetCurrentMap()) {
+            mpAtlas->GetCurrentMap()->mvpKeyFrameOrigins.push_back(pKFini);
+        }
+
+        std::cout << "🔄 更新地图绘制器..." << std::endl;
+        // 更新地图绘制器
+        if (mpMapDrawer) {
+            mpMapDrawer->SetCurrentCameraPose(pKFini->GetPose());
+        }
+
+        std::cout << "🔄 更新系统状态..." << std::endl;
+        // todo5 更新系统状态
+        mState = OK;
+        std::cout << "✅ 棋盘格初始化完全成功！系统状态已设置为OK" << std::endl;
+    }
+    catch(const std::exception& e) {
+        std::cerr << "❌ 初始化后续处理发生异常: " << e.what() << std::endl;
+        mState = NOT_INITIALIZED;
+    }
+}
+
+//! 棋盘格初始化主函数
+/**
+ * @brief 使用棋盘格初始化SLAM系统
+ * @param mImGray 输入的灰度图像
+ * @return bool 返回是否成功初始化
+ */
+bool Tracking::InitializeWithChessboard(const cv::Mat &mImGray)
+{
+    // 步骤1：检测棋盘格角点
+    std::vector<cv::Point2f> corners;
+    bool found = DetectChessboard(mImGray, corners, mChessboardSize);
+
+    if (!found)
+    {
+        std::cout << "未检测到棋盘格，初始化失败" << std::endl;
+        return false;
+    }
+
+    // 步骤2：计算相机位姿
+    cv::Mat Tcw;
+    std::vector<cv::Point3f> worldPoints; // 用于存储世界坐标系中的3D点
+    bool poseComputed = ComputePoseFromChessboard(corners, Tcw, worldPoints);
+
+    if (!poseComputed)
+    {
+        std::cout << "相机位姿计算失败，初始化失败" << std::endl;
+        return false;
+    }
+
+    // 步骤3：设置当前帧的位姿
+    mCurrentFrame.SetPose(Sophus::SE3f(
+        Converter::toMatrix3f(Tcw.rowRange(0, 3).colRange(0, 3)),
+        Converter::toVector3f(Tcw.rowRange(0, 3).col(3))
+    ));
+
+    // 🎯 计算并显示相机在自定义世界坐标系中的位置（这将是轨迹的起始点）
+    cv::Mat Twc = Tcw.inv();
+    cv::Mat camera_position = Twc.rowRange(0,3).col(3);
+
+    std::cout << "🎯 轨迹起始位置（相机在自定义世界坐标系中的位置）: ("
+              << camera_position.at<float>(0) << ", "
+              << camera_position.at<float>(1) << ", "
+              << camera_position.at<float>(2) << ")" << std::endl;
+
+    // 步骤4：创建混合初始地图（棋盘格角点 + ORB特征点）
+    CreateInitialMapWithChessboard(worldPoints, corners);
+
+    // 🔧 设置运动模型，避免跟踪失败
+    mbVelocity = false; // 初始化时没有速度模型
+
+    // 🎯 关键：禁用棋盘格初始化，防止重复初始化
+    mbUseChessboardInit = false;
+    mbChessboardInitialized = true;  // 标记已完成棋盘格初始化
+    std::cout << "🔒 棋盘格初始化完成，已禁用重复初始化" << std::endl;
+
+    // 步骤5：输出初始化信息
+    std::cout << "✅ 使用棋盘格成功初始化SLAM系统" << std::endl;
+    std::cout << "   棋盘格大小: " << mChessboardSize.width << "x" << mChessboardSize.height << std::endl;
+    std::cout << "   方格尺寸: " << mSquareSize << "米" << std::endl;
+    std::cout << "   自定义坐标系原点: (" << mStartX << ", " << mStartY << ", " << mZHeight << ")" << std::endl;
+    std::cout << "🚀 系统将继续使用标准ORB-SLAM3跟踪模式" << std::endl;
+
+    return true;
+}
+
+
+
+
 /**
  * @brief 跟踪过程，包括恒速模型跟踪、参考关键帧跟踪、局部地图跟踪
  * track包含两部分：估计运动、跟踪局部地图
- * 
+ *
  * Step 1：初始化
  * Step 2：跟踪
  * Step 3：记录位姿信息，用于轨迹复现
@@ -2184,7 +2816,7 @@ void Tracking::Track()
                     else if(pCurrentMap->KeyFramesInMap()>10)
                     {
                         // cout << "KF in map: " << pCurrentMap->KeyFramesInMap() << endl;
-                        // 条件1：当前地图中关键帧数目较多（大于10） 
+                        // 条件1：当前地图中关键帧数目较多（大于10）
                         // 条件2（隐藏条件）：当前帧距离上次重定位帧超过1s（说明还比较争气，值的救）或者非IMU模式
                         // 同时满足条件1，2，则将状态标记为RECENTLY_LOST，后面会结合IMU预测的位姿看看能不能拽回来
                         mState = RECENTLY_LOST;
@@ -2247,6 +2879,14 @@ void Tracking::Track()
 
                     if (pCurrentMap->KeyFramesInMap()<10)
                     {
+                        // 🔄 如果使用了棋盘格初始化，重置地图并重新启用棋盘格检测
+                        if (mbChessboardInitialized) {
+                            std::cout << "🔄 棋盘格初始化的地图跟踪失败，重置地图并重新启用棋盘格检测..." << std::endl;
+                            // 重新启用棋盘格初始化，以便重新检测
+                            mbUseChessboardInit = true;
+                            mbChessboardInitialized = false;
+                            std::cout << "✅ 已重新启用棋盘格初始化，系统将重新检测棋盘格" << std::endl;
+                        }
                         // 当前地图中关键帧数目小于10，重置当前地图
                         mpSystem->ResetActiveMap();
                         Verbose::PrintMess("Reseting current map...", Verbose::VERBOSITY_NORMAL);
@@ -2584,7 +3224,7 @@ void Tracking::Track()
             // 作者这里说允许在BA中被Huber核函数判断为外点的传入新的关键帧中，让后续的BA来审判他们是不是真正的外点
             // 但是估计下一帧位姿的时候我们不想用这些外点，所以删掉
 
-            //  Step 9.5 删除那些在BA中检测为外点的地图点  
+            //  Step 9.5 删除那些在BA中检测为外点的地图点
             for(int i=0; i<mCurrentFrame.N;i++)
             {
                 if(mCurrentFrame.mvpMapPoints[i] && mCurrentFrame.mvbOutlier[i])
@@ -2599,6 +3239,14 @@ void Tracking::Track()
             // 如果地图中关键帧小于10，重置当前地图，退出当前跟踪
             if(pCurrentMap->KeyFramesInMap()<=10)  // 上一个版本这里是5
             {
+                // 🔄 如果使用了棋盘格初始化，重置地图并重新启用棋盘格检测
+                if (mbChessboardInitialized) {
+                    std::cout << "🔄 棋盘格初始化的地图跟踪失败，重置地图并重新启用棋盘格检测..." << std::endl;
+                    // 重新启用棋盘格初始化，以便重新检测
+                    mbUseChessboardInit = true;
+                    mbChessboardInitialized = false;
+                    std::cout << "✅ 已重新启用棋盘格初始化，系统将重新检测棋盘格" << std::endl;
+                }
                 mpSystem->ResetActiveMap();
                 return;
             }
@@ -2806,7 +3454,7 @@ void Tracking::StereoInitialization()
  *
  * 并行地计算基础矩阵和单应性矩阵，选取其中一个模型，恢复出最开始两帧之间的相对姿态以及点云
  * 得到初始两帧的匹配、相对运动、初始MapPoints
- * 
+ *
  * Step 1：（未创建）得到用于初始化的第一帧，初始化需要两帧
  * Step 2：（已创建）如果当前帧特征点数大于100，则得到用于单目初始化的第二帧
  * Step 3：在mInitialFrame与mCurrentFrame中找匹配的特征点对
@@ -2817,7 +3465,7 @@ void Tracking::StereoInitialization()
  */
 void Tracking::MonocularInitialization()
 {
-    // Step 1 如果单目初始器还没有被创建，则创建。后面如果重新初始化时会清掉这个
+    //? Step 1 如果单目初始器还没有被创建，则创建。后面如果重新初始化时会清掉这个
     if(!mbReadyToInitializate)
     {
         // Set Reference Frame
@@ -2915,7 +3563,7 @@ void Tracking::MonocularInitialization()
 
 /**
  * @brief 单目相机成功初始化后用三角化得到的点生成MapPoints
- * 
+ *
  */
 void Tracking::CreateInitialMapMonocular()
 {
@@ -2995,7 +3643,7 @@ void Tracking::CreateInitialMapMonocular()
     Verbose::PrintMess("New Map created with " + to_string(mpAtlas->MapPointsInMap()) + " points", Verbose::VERBOSITY_QUIET);
     Optimizer::GlobalBundleAdjustemnt(mpAtlas->GetCurrentMap(),20);
 
-    // Step 5 取场景的中值深度，用于尺度归一化 
+    // Step 5 取场景的中值深度，用于尺度归一化
     // 为什么是 pKFini 而不是 pKCur ? 答：都可以的，内部做了位姿变换了
     float medianDepth = pKFini->ComputeSceneMedianDepth(2);
     float invMedianDepth;
@@ -3015,7 +3663,7 @@ void Tracking::CreateInitialMapMonocular()
     // Step 6 将两帧之间的变换归一化到平均深度1的尺度下
     // Scale initial baseline
     Sophus::SE3f Tc2w = pKFcur->GetPose();
-    // x/z y/z 将z归一化到1 
+    // x/z y/z 将z归一化到1
     Tc2w.translation() *= invMedianDepth;
     pKFcur->SetPose(Tc2w);
 
@@ -3133,7 +3781,7 @@ void Tracking::CreateMapInAtlas()
 
 /*
  * @brief 检查上一帧中的地图点是否需要被替换
- * 
+ *
  * Local Mapping线程可能会将关键帧中某些地图点进行替换，由于tracking中需要用到上一帧地图点，所以这里检查并更新上一帧中被替换的地图点
  * @see LocalMapping::SearchInNeighbors()
  */
@@ -3159,14 +3807,14 @@ void Tracking::CheckReplacedInLastFrame()
 
 /*
  * @brief 用参考关键帧的地图点来对当前普通帧进行跟踪
- * 
+ *
  * Step 1：将当前普通帧的描述子转化为BoW向量
  * Step 2：通过词袋BoW加速当前帧与参考帧之间的特征点匹配
  * Step 3: 将上一帧的位姿态作为当前帧位姿的初始值
  * Step 4: 通过优化3D-2D的重投影误差来获得位姿
  * Step 5：剔除优化后的匹配点中的外点
  * @return 如果匹配数超10，返回true
- * 
+ *
  */
 bool Tracking::TrackReferenceKeyFrame()
 {
@@ -3254,7 +3902,7 @@ void Tracking::UpdateLastFrame()
     Sophus::SE3f Tlr = mlRelativeFramePoses.back();
     // 将上一帧的世界坐标系下的位姿计算出来
     // l:last, r:reference, w:world
-    // Tlw = Tlr*Trw 
+    // Tlw = Tlr*Trw
     mLastFrame.SetPose(Tlr * pRef->GetPose());
 
     // 如果上一帧为关键帧，或者单目/单目惯性，SLAM模式的情况，则退出
@@ -3458,14 +4106,14 @@ bool Tracking::TrackWithMotionModel()
 
 /**
  * @brief 用局部地图进行跟踪，进一步优化位姿
- * 
+ *
  * 1. 更新局部地图，包括局部关键帧和关键点
  * 2. 对局部MapPoints进行投影匹配
  * 3. 根据匹配对估计当前帧的姿态
  * 4. 根据姿态剔除误匹配
  * @return true if success
- * 
- * Step 1：更新局部关键帧mvpLocalKeyFrames和局部地图点mvpLocalMapPoints 
+ *
+ * Step 1：更新局部关键帧mvpLocalKeyFrames和局部地图点mvpLocalMapPoints
  * Step 2：在局部地图中查找与当前帧匹配的MapPoints, 其实也就是对局部地图点进行跟踪
  * Step 3：更新局部所有MapPoints后对位姿再次优化
  * Step 4：更新当前帧的MapPoints被观测程度，并统计跟踪局部地图的效果
@@ -3602,8 +4250,18 @@ bool Tracking::TrackLocalMap()
     }
     else
     {
-        //以上情况都不满足，只要跟踪的地图点大于30个就认为成功了
-        if(mnMatchesInliers<30)
+        // 🎯 针对棋盘格初始化的特殊处理：如果地图点总数很少（比如棋盘格初始化），降低跟踪成功的阈值
+        int totalMapPoints = mpAtlas->MapPointsInMap();
+        int minMatches = 30; // 默认阈值
+
+        if (totalMapPoints <= 15) {
+            // 如果地图点总数很少（比如棋盘格初始化的9个点），大幅降低阈值
+            minMatches = max(3, totalMapPoints / 3); // 至少3个，或者总数的1/3
+            std::cout << "🎯 棋盘格模式：降低跟踪阈值至 " << minMatches << " 个匹配点（总地图点数: " << totalMapPoints << "）" << std::endl;
+        }
+
+        //以上情况都不满足，只要跟踪的地图点大于阈值就认为成功了
+        if(mnMatchesInliers < minMatches)
             return false;
         else
             return true;
@@ -3612,7 +4270,7 @@ bool Tracking::TrackLocalMap()
 
 /**
  * @brief 判断当前帧是否需要插入关键帧
- * 
+ *
  * Step 1：纯VO模式下不插入关键帧，如果局部地图被闭环检测使用，则不插入关键帧
  * Step 2：如果距离上一次重定位比较近，或者关键帧数目超出最大限制，不插入关键帧
  * Step 3：得到参考关键帧跟踪到的地图点数量
@@ -3665,7 +4323,7 @@ bool Tracking::NeedNewKeyFrame()
 
     // Tracked MapPoints in the reference keyframe
     // Step 4：得到参考关键帧跟踪到的地图点数量
-    // UpdateLocalKeyFrames 函数中会将与当前关键帧共视程度最高的关键帧设定为当前帧的参考关键帧 
+    // UpdateLocalKeyFrames 函数中会将与当前关键帧共视程度最高的关键帧设定为当前帧的参考关键帧
 
     // 地图点的最小观测次数
     int nMinObs = 3;
@@ -3721,13 +4379,13 @@ bool Tracking::NeedNewKeyFrame()
         thRefRatio = 0.9f;
     }*/
 
-    // 单目情况下插入关键帧的频率很高 
+    // 单目情况下插入关键帧的频率很高
     if(mSensor==System::MONOCULAR)
         thRefRatio = 0.9f;
 
     if(mpCamera2) thRefRatio = 0.75f;
 
-    // 单目+IMU情况下如果，匹配内点数目超过350，插入关键帧的频率可以适当降低  
+    // 单目+IMU情况下如果，匹配内点数目超过350，插入关键帧的频率可以适当降低
     if(mSensor==System::IMU_MONOCULAR)
     {
         if(mnMatchesInliers>350) // Points tracked from the local map
@@ -3818,7 +4476,7 @@ bool Tracking::NeedNewKeyFrame()
 /**
  * @brief 创建新的关键帧
  * 对于非单目的情况，同时创建新的MapPoints
- * 
+ *
  * Step 1：将当前帧构造成关键帧
  * Step 2：将当前关键帧设置为当前帧的参考关键帧
  * Step 3：对于双目或rgbd摄像头，为当前帧生成新的MapPoints
@@ -3891,7 +4549,7 @@ void Tracking::CreateNewKeyFrame()
             // Step 3.2：按照深度从小到大排序
             sort(vDepthIdx.begin(),vDepthIdx.end());
 
-            // Step 3.3：从中找出不是地图点的生成临时地图点 
+            // Step 3.3：从中找出不是地图点的生成临时地图点
             // 处理的近点的个数
             int nPoints = 0;
             for(size_t j=0; j<vDepthIdx.size();j++)
@@ -4066,7 +4724,7 @@ void Tracking::SearchLocalPoints()
 /**
  * @brief 更新LocalMap
  *
- * 局部地图包括： 
+ * 局部地图包括：
  * 1、K1个关键帧、K2个临近关键帧和参考关键帧
  * 2、由这些关键帧观测到的MapPoints
  */
@@ -4122,7 +4780,7 @@ void Tracking::UpdateLocalPoints()
 /**
  * @brief 跟踪局部地图函数里，更新局部关键帧
  * 方法是遍历当前帧的地图点，将观测到这些地图点的关键帧和相邻的关键帧及其父子关键帧，作为mvpLocalKeyFrames
- * Step 1：遍历当前帧的地图点，记录所有能观测到当前帧地图点的关键帧 
+ * Step 1：遍历当前帧的地图点，记录所有能观测到当前帧地图点的关键帧
  * Step 2：更新局部关键帧（mvpLocalKeyFrames），添加局部关键帧包括以下3种类型
  *      类型1：能观测到当前帧地图点的关键帧，也称一级共视关键帧
  *      类型2：一级共视关键帧的共视关键帧，称为二级共视关键帧
@@ -4222,7 +4880,7 @@ void Tracking::UpdateLocalKeyFrames()
     }
 
     // Include also some not-already-included keyframes that are neighbors to already-included keyframes
-    // Step 2.2 遍历一级共视关键帧，寻找更多的局部关键帧 
+    // Step 2.2 遍历一级共视关键帧，寻找更多的局部关键帧
     for(vector<KeyFrame*>::const_iterator itKF=mvpLocalKeyFrames.begin(), itEndKF=mvpLocalKeyFrames.end(); itKF!=itEndKF; itKF++)
     {
         // Limit the number of keyframes
@@ -4311,9 +4969,9 @@ void Tracking::UpdateLocalKeyFrames()
 
 /**
  * @details 重定位过程
- * @return true 
- * @return false 
- * 
+ * @return true
+ * @return false
+ *
  * Step 1：计算当前帧特征点的词袋向量
  * Step 2：找到与当前帧相似的候选关键帧
  * Step 3：通过BoW进行匹配
@@ -4487,7 +5145,7 @@ bool Tracking::Relocalization()
 
                         // If many inliers but still not enough, search by projection again in a narrower window
                         // the camera has been already optimized with many points
-                        // Step 4.4：如果BA后内点数还是比较少(<50)但是还不至于太少(>30)，可以挽救一下, 最后垂死挣扎 
+                        // Step 4.4：如果BA后内点数还是比较少(<50)但是还不至于太少(>30)，可以挽救一下, 最后垂死挣扎
                         // 重新执行上一步 4.3的过程，只不过使用更小的搜索窗口
                         // 这里的位姿已经使用了更多的点进行了优化,应该更准，所以使用更小的窗口搜索
                         if(nGood>30 && nGood<50)

@@ -240,4 +240,187 @@ A flag in `include\Config.h` activates time measurements. It is necessary to unc
 
 # 9. Calibration
 You can find a tutorial for visual-inertial calibration and a detailed description of the contents of valid configuration files at  `Calibration_Tutorial.pdf`
-# ORB-SLAM3_byZyh
+
+# SLAM轨迹可视化工具
+
+这个工具包用于可视化SLAM系统输出的轨迹数据，支持完整轨迹和关键帧轨迹的对比分析。
+
+## 文件说明
+
+### 数据文件
+- `f_dataset-Basler_mono_final_23.txt`: 完整轨迹数据（977个数据点）
+- `kf_dataset-Basler_mono_final_23.txt`: 关键帧轨迹数据（34个数据点）
+
+### 脚本文件
+- `visualize_trajectory_enhanced.py`: 增强版轨迹可视化脚本（推荐使用）
+- `trajectory_info.py`: 轨迹数据信息查看器
+- `requirements.txt`: Python依赖包列表
+
+### 输出文件夹结构
+运行脚本后会自动创建以下文件夹结构：
+```
+trajectory_visualization_output/
+├── plots/                          # 生成的可视化图表
+│   ├── trajectory_2d_enhanced.png
+│   ├── trajectory_3d_enhanced.png
+│   └── motion_analysis.png
+└── data/                           # 轨迹数据文件备份
+    ├── f_dataset-Basler_mono_final_23.txt
+    └── kf_dataset-Basler_mono_final_23.txt
+```
+
+## 数据格式
+
+每行数据格式为：
+```
+时间戳 x y z qx qy qz qw
+```
+
+其中：
+- `时间戳`: 纳秒级时间戳
+- `x, y, z`: 位置坐标（米）
+- `qx, qy, qz, qw`: 四元数表示的旋转
+
+## 安装依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+或者手动安装：
+```bash
+pip install numpy matplotlib
+```
+
+## 使用方法
+
+### 快速查看轨迹信息
+```bash
+python3 trajectory_info.py
+```
+
+### 生成可视化图表（推荐）
+```bash
+python3 visualize_trajectory_enhanced.py
+```
+
+生成的图片将保存在 `trajectory_visualization_output/plots/` 目录中：
+- `trajectory_2d_enhanced.png`: 增强版2D轨迹对比图
+- `trajectory_3d_enhanced.png`: 增强版3D轨迹图（包含时间进展颜色映射）
+- `motion_analysis.png`: 运动分析图表
+
+## 字号调节功能
+
+代码中已添加详细的字号调节注释，您可以根据需要修改以下字号：
+
+### 2D轨迹图 (plot_trajectory_2d_enhanced函数)
+- **主标题**: `fontsize=16` → 可改为18, 20等
+- **子图标题**: `fontsize=14` → 可改为12, 16等  
+- **坐标轴标签**: `fontsize=12` → 可改为10, 14等
+- **图例**: `fontsize=10` → 可改为8, 12等
+- **统计信息文字**: `fontsize=11` → 可改为9, 13等（已调大2号）
+
+### 3D轨迹图 (plot_trajectory_3d_enhanced函数)
+- **标题**: `fontsize=14` → 可改为12, 16等
+- **坐标轴标签**: `fontsize=12` → 可改为10, 14等
+- **图例**: `fontsize=10` → 可改为8, 12等
+- **颜色条标签**: `fontsize=10` → 可改为8, 12等
+
+### 运动分析图 (plot_motion_analysis函数)
+- **主标题**: `fontsize=16` → 可改为14, 18等
+- **子图标题**: `fontsize=14` → 可改为12, 16等
+- **坐标轴标签**: `fontsize=12` → 可改为10, 14等
+- **图例**: `fontsize=9/10` → 可改为8, 11等
+
+## 功能特性
+
+### 基础功能
+- 2D多视角轨迹对比（XY、XZ、YZ平面）
+- 3D轨迹可视化
+- 轨迹统计信息（长度、范围等）
+- 坐标随时间变化分析
+
+### 增强功能
+- 起点和终点标记
+- 时间进展颜色映射
+- 详细的运动统计分析
+- 步长分析
+- 轨迹密度热图
+- 高度变化分析
+- 自动文件夹管理
+- 字体处理优化
+
+## 输出图表说明
+
+### 2D轨迹对比图
+- **XY平面（俯视图）**: 从上往下看的轨迹投影
+- **XZ平面（侧视图）**: 从侧面看的轨迹投影
+- **YZ平面（正视图）**: 从正面看的轨迹投影
+- **统计信息**: 轨迹长度、数据点数、坐标范围等（右下角，字号已调大）
+
+### 3D轨迹图
+- 完整的三维轨迹可视化
+- 起点（绿色方块）和终点（红色三角）标记
+- 时间进展颜色映射
+
+### 运动分析图
+- **位置vs时间**: 各坐标轴随时间的变化
+- **步长分析**: 相邻点之间的距离分布
+- **轨迹密度**: XY平面的轨迹密度热图
+- **高度变化**: Z坐标随时间的变化
+
+## 轨迹统计信息
+
+脚本会自动计算并显示以下统计信息：
+- 数据点数量
+- 轨迹总长度（路径长度）
+- 总位移（起点到终点的直线距离）
+- 平均步长和最大步长
+- 各坐标轴的范围
+
+## 注意事项
+
+1. 脚本会自动创建输出文件夹
+2. 轨迹数据会备份到data文件夹中
+3. 如果系统没有中文字体，图表标签会自动切换为英文
+4. 生成的图片为高分辨率PNG格式（300 DPI）
+5. 脚本会自动处理坐标轴比例，确保轨迹显示不变形
+
+## 故障排除
+
+### 常见问题
+1. **文件未找到错误**: 确保数据文件在正确位置
+2. **中文字体警告**: 这不影响功能，只是显示效果
+3. **内存不足**: 对于大型数据集，可能需要调整采样率
+
+### 性能优化
+- 对于超大数据集，可以修改脚本中的采样间隔
+- 可以选择只生成特定类型的图表来节省时间
+
+## 扩展功能
+
+脚本设计为模块化，可以轻松添加新的分析功能：
+- 速度和加速度分析
+- 轨迹平滑处理
+- 误差分析
+- 与真值轨迹的对比
+
+## 示例输出
+
+运行脚本后，会在控制台看到类似输出：
+```
+Loading trajectory data...
+Full trajectory data points: 977
+Keyframe data points: 34
+Trajectory files copied to: trajectory_visualization_output/data
+Generating enhanced 2D trajectory plots...
+Generating enhanced 3D trajectory plot...
+Generating motion analysis plots...
+Saving plots...
+Plots saved to:
+- trajectory_visualization_output/plots/trajectory_2d_enhanced.png: Enhanced 2D trajectory comparison
+- trajectory_visualization_output/plots/trajectory_3d_enhanced.png: Enhanced 3D trajectory with time progression
+- trajectory_visualization_output/plots/motion_analysis.png: Motion analysis plots
+
+All outputs saved in: trajectory_visualization_output/
+```

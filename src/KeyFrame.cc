@@ -32,8 +32,8 @@ KeyFrame::KeyFrame()
     mnTrackReferenceForFrame(0), mnFuseTargetForKF(0), mnBALocalForKF(0), mnBAFixedForKF(0), mnBALocalForMerge(0),
     mnLoopQuery(0), mnLoopWords(0), mnRelocQuery(0), mnRelocWords(0), mnMergeQuery(0), mnMergeWords(0), mnBAGlobalForKF(0),
     fx(0), fy(0), cx(0), cy(0), invfx(0), invfy(0), mnPlaceRecognitionQuery(0), mnPlaceRecognitionWords(0), mPlaceRecognitionScore(0),
-    mbf(0), mb(0), mThDepth(0), N(0), mvKeys(static_cast<vector<cv::KeyPoint>>(NULL)), mvKeysUn(static_cast<vector<cv::KeyPoint>>(NULL)),
-    mvuRight(static_cast<vector<float>>(NULL)), mvDepth(static_cast<vector<float>>(NULL)), mnScaleLevels(0), mfScaleFactor(0),
+    mbf(0), mb(0), mThDepth(0), N(0), mvKeys(), mvKeysUn(),
+    mvuRight(), mvDepth(), mnScaleLevels(0), mfScaleFactor(0),
     mfLogScaleFactor(0), mvScaleFactors(0), mvLevelSigma2(0), mvInvLevelSigma2(0), mnMinX(0), mnMinY(0), mnMaxX(0),
     mnMaxY(0), mPrevKF(static_cast<KeyFrame *>(NULL)), mNextKF(static_cast<KeyFrame *>(NULL)), mbFirstConnection(true), mpParent(NULL), mbNotErase(false),
     mbToBeErased(false), mbBad(false), mHalfBaseline(0), mbCurrentPlaceRecognition(false), mnMergeCorrectedForKF(0),
@@ -221,7 +221,7 @@ void KeyFrame::AddConnection(KeyFrame *pKF, const int &weight)
 
 /**
  * @brief 按照权重对连接的关键帧进行排序
- * 
+ *
  * 更新后的变量存储在mvpOrderedConnectedKeyFrames和mvOrderedWeights中
  */
 void KeyFrame::UpdateBestCovisibles()
@@ -341,7 +341,7 @@ void KeyFrame::AddMapPoint(MapPoint *pMP, const size_t &idx)
 
 /**
  * @brief 由于其他的原因,导致当前关键帧观测到的某个地图点被删除(bad==true)了,将该地图点置为NULL
- * 
+ *
  * @param[in] idx   地图点在该关键帧中的id
  */
 void KeyFrame::EraseMapPointMatch(const int &idx)
@@ -354,9 +354,9 @@ void KeyFrame::EraseMapPointMatch(MapPoint *pMP)
 {
     tuple<size_t, size_t> indexes = pMP->GetIndexInKeyFrame(this);
     size_t leftIndex = get<0>(indexes), rightIndex = get<1>(indexes);
-    if (leftIndex != -1)
+    if (leftIndex != static_cast<size_t>(-1))
         mvpMapPoints[leftIndex] = static_cast<MapPoint *>(NULL);
-    if (rightIndex != -1)
+    if (rightIndex != static_cast<size_t>(-1))
         mvpMapPoints[rightIndex] = static_cast<MapPoint *>(NULL);
 }
 
@@ -431,7 +431,7 @@ MapPoint *KeyFrame::GetMapPoint(const size_t &idx)
 
 /*
  * 更新图的连接
- * 
+ *
  * 1. 首先获得该关键帧的所有MapPoint点，统计观测到这些3d点的每个关键帧与其它所有关键帧之间的共视程度
  *    对每一个找到的关键帧，建立一条边，边的权重是该关键帧与当前关键帧公共3d点的个数。
  * 2. 并且该权重必须大于一个阈值，如果没有超过该阈值的权重，那么就只保留权重最大的边（与其它关键帧的共视程度比较高）
@@ -652,7 +652,7 @@ void KeyFrame::SetNotErase()
 
 /**
  * @brief 删除当前的这个关键帧,表示不进行回环检测过程;由回环检测线程调用
- * 
+ *
  */
 void KeyFrame::SetErase()
 {
@@ -675,7 +675,7 @@ void KeyFrame::SetErase()
 /**
  * @brief 真正地执行删除关键帧的操作
  * 需要删除的是该关键帧和其他所有帧、地图点之间的连接关系
- * 
+ *
  * mbNotErase作用：表示要删除该关键帧及其连接关系但是这个关键帧有可能正在回环检测或者计算sim3操作，这时候虽然这个关键帧冗余，但是却不能删除，
  * 仅设置mbNotErase为true，这时候调用setbadflag函数时，不会将这个关键帧删除，只会把mbTobeErase变成true，代表这个关键帧可以删除但不到时候,先记下来以后处理。
  * 在闭环线程里调用 SetErase()会根据mbToBeErased 来删除之前可以删除还没删除的帧。
@@ -762,7 +762,7 @@ void KeyFrame::SetBadFlag()
                             if (w > max)
                             {
                                 pC = pKF;                   // 子关键帧
-                                pP = vpConnected[i];        // 目前和子关键帧具有最大权值的关键帧（将来的父关键帧） 
+                                pP = vpConnected[i];        // 目前和子关键帧具有最大权值的关键帧（将来的父关键帧）
                                 max = w;                    // 这个最大的权值
                                 bContinue = true;           // 说明子节点找到了可以作为其新父关键帧的帧
                             }
@@ -898,7 +898,7 @@ bool KeyFrame::IsInImage(const float &x, const float &y) const
 
 /**
  * @brief 在双目和RGBD情况下将特征点反投影到空间中得到世界坐标系下三维点
- * 
+ *
  * @param[in] i                         第i个特征点
  * @return Eigen::Vector3f              返回世界坐标系下三维点
  */

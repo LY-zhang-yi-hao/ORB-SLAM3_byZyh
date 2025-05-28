@@ -31,7 +31,7 @@ void LoadImages(const string &strImagePath, const string &strPathTimes,
                 vector<string> &vstrImages, vector<double> &vTimeStamps);
 
 int main(int argc, char **argv)
-{  
+{
     if(argc < 5)
     {
         cerr << endl << "Usage: ./mono_euroc path_to_vocabulary path_to_settings path_to_sequence_folder_1 path_to_times_file_1 (path_to_image_folder_2 path_to_times_file_2 ... path_to_image_folder_N path_to_times_file_N) (trajectory_file_name)" << endl;
@@ -191,13 +191,25 @@ int main(int argc, char **argv)
     {
         const string kf_file =  "kf_" + string(argv[argc-1]) + ".txt";
         const string f_file =  "f_" + string(argv[argc-1]) + ".txt";
+        const string kf_chessboard_file =  "kf_chessboard_" + string(argv[argc-1]) + ".txt";
+        const string f_chessboard_file =  "f_chessboard_" + string(argv[argc-1]) + ".txt";
+
+        // 保存标准轨迹
         SLAM.SaveTrajectoryEuRoC(f_file);
         SLAM.SaveKeyFrameTrajectoryEuRoC(kf_file);
+
+        // 保存棋盘格坐标系轨迹
+        SLAM.SaveTrajectoryEuRoCWithChessboard(f_chessboard_file);
+        SLAM.SaveKeyFrameTrajectoryEuRoCWithChessboard(kf_chessboard_file);
     }
     else
     {
         SLAM.SaveTrajectoryEuRoC("CameraTrajectory.txt");
         SLAM.SaveKeyFrameTrajectoryEuRoC("KeyFrameTrajectory.txt");
+
+        // 保存棋盘格坐标系轨迹
+        SLAM.SaveTrajectoryEuRoCWithChessboard("CameraTrajectory_Chessboard.txt");
+        SLAM.SaveKeyFrameTrajectoryEuRoCWithChessboard("KeyFrameTrajectory_Chessboard.txt");
     }
 
     return 0;

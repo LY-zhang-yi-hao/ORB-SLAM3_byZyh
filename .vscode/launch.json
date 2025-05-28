@@ -1,0 +1,32 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug ORB-SLAM3 Mono",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/Examples/Monocular/mono_euroc",
+            "args": [
+                "./Vocabulary/ORBvoc.txt",
+                "./Datasets/Mydataset/5_23_desktop/mav0/cam0/Basler.yaml",
+                "./Datasets/Mydataset/5_23_desktop",
+                "./Examples/Monocular/Basler_TimeStamps/5_23_desktop.txt",
+                "test"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "build",
+            "miDebuggerPath": "/usr/bin/gdb"
+        }
+    ]
+}
