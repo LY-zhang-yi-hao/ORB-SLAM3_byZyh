@@ -1727,23 +1727,39 @@ Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &times
             mCurrentFrame = Frame(mImGray,timestamp,mpORBextractorLeft,mpORBVocabulary,mpCamera,mDistCoef,mbf,mThDepth);
     }
 
-    //! 🔍 如果启用了棋盘格初始化且系统未初始化，尝试使用棋盘格初始化
-    if (mbUseChessboardInit && (mState==NOT_INITIALIZED || mState==NO_IMAGES_YET))
+    // 设置当前帧的文件名和数据集ID
+    mCurrentFrame.mNameFile = filename;
+    mCurrentFrame.mnDataset = mnNumDataset;
+
+    //! 🔍 启用棋盘格检测计算位姿，保存位姿信息-----------------------------------------------
+    if (mbUseChessboardInit && !mbHasChessboardPosed && (mState==NOT_INITIALIZED || mState==NO_IMAGES_YET))
     {
-        // 设置当前帧的文件名和数据集ID（在初始化之前设置）
-        mCurrentFrame.mNameFile = filename;
-        mCurrentFrame.mnDataset = mnNumDataset;
 
         // 尝试使用棋盘格初始化（使用灰度图）
-        if(InitializeWithChessboard(mImGray))
+        std::vector<cv::Point2f> corners;
+        bool found = cv::findChessboardCornersSB(mImGray, chessboardSize, corners);        
+        if(found)
         {
-            std::cout << "Successfully initialized with chessboard!" << std::endl;
+            std::cout << "Chessboard detected, computing pose..." << std::endl;
+            //计算相机位姿
+            cv::Mat Tcw;
+            std::vector<cv::Point3f> worldPoints;
+            bool poseComputed = ComputePoseFromChessboard(corners, Tcw, worldPoints);
+            if (poseComputed)            
+            {                
+                // 设置当前帧的位姿
+                mTcw_Chessboard = Sophus::SE3f(
+                    Converter::toMatrix3f(Tcw.rowRange(0, 3).colRange(0, 3)),
+                    Converter::toVector3f(Tcw.rowRange(0, 3).col(3))
+                );
+                mTwc_chessboard = mTcw_Chessboard.inverse();
+                mbHasChessboardPosed = true;
 
-            // 初始化成功，直接返回当前帧位姿
-            return mCurrentFrame.GetPose();
+                std::cout << "Chessboard pose computed: " << mTcw_Chessboard.matrix() << std::endl;
+                std::cout << " will apply coordinate system conversion after initialization" << std::endl;
+            }
         }
-        // 如果棋盘格初始化失败，继续常规初始化流程
-    }
+    }               
     else if(mSensor == System::IMU_MONOCULAR) //如果是单目IMU相机
     {
         if(mState==NOT_INITIALIZED || mState==NO_IMAGES_YET ||(lastID - initID) < mMaxFrames)
@@ -1766,8 +1782,6 @@ Sophus::SE3f Tracking::GrabImageMonocular(const cv::Mat &im, const double &times
     if (mState==NO_IMAGES_YET)
         t0=timestamp; // 记录第一帧的时间戳
 
-    mCurrentFrame.mNameFile = filename;
-    mCurrentFrame.mnDataset = mnNumDataset;
 
 #ifdef REGISTER_TIMES
     vdORBExtract_ms.push_back(mCurrentFrame.mTimeORB_Ext);
@@ -2283,6 +2297,81 @@ bool Tracking::ComputePoseFromChessboard(const std::vector<cv::Point2f> &corners
     return true;  // 添加返回值
 }
 
+//! 应用棋盘格坐标系转换到所有地图元素
+/**
+ * @brief 应用棋盘格坐标系转换到所有地图元素
+ * @param Tcw_chess 棋盘格位姿
+ * @param Twc_chess 相机坐标系到棋盘格世界坐标系的变换（逆变换）
+ */
+void TransformAllMapElements(const Sophus::SE3f &Tcw_chess, const Sophus::SE3f &Twc_chess)
+{
+    //todo 1. 获取当前地图 ，关键帧 ，地图点
+    Map* pMap = mpAtlas->GetCurrentMap();
+    vector<KeyFrame*> vpKFs = pMap->GetAllKeyFrames();
+    vector<MapPoint*> vpMPs = pMap->GetAllMapPoints();
+
+    //todo 2. 计算从原始世界坐标系到棋盘格坐标系的变换
+    //假设第一个关键帧定义了世界坐标系
+    if (vpKFs.empty())
+    {
+        std::cerr << "Error:❌ No keyframes in the map." << std::endl;
+        return;
+    }
+
+    // 获取第一个关键帧的位姿
+    KeyFrame* pFirstKF = vpKFs[0];
+    Sophus::SE3f Tcw_first = pFirstKF->GetPose();
+    Sophus::SE3f Twc_first = pFirstKF->GetPoseInverse();
+
+    // 计算从原始世界坐标系到棋盘格坐标系的变换
+    // Tcb = Tcw_chess * Twc_first 表示从原始世界坐标系到棋盘格坐标系的变换
+    Sophus::SE3f Tcb = Tcw_chess * Twc_first;
+    Sophus::SE3f Twc_chess = Tcb.inverse();
+    std::cout << "🔄 原始世界坐标系到棋盘格坐标系的变换矩阵：\n" << Tcb.matrix() << std::endl;
+
+    //todo 3. 应用变换到所有地图元素
+    
+    //todo 3.1 更新关键帧的位姿
+    for (KeyFrame* pKF : vpKFs)
+    {
+        // 获取关键帧的位姿
+        Sophus::SE3f Tcw_orig = pKF->GetPose();
+        // 计算关键帧在棋盘格坐标系的位姿
+        // Tcw_new = Tcw_orig * Tbc
+        Sophus::SE3f Tcw_new = Tcw_orig * Tbc;
+        // 更新关键帧的位姿
+        pKF->SetPose(Tcw_new);
+    }
+    
+    //todo 3.2 更新地图点
+    for (MapPoint* pMP : vpMPs)
+    {
+        if(!pMP || pMP->isBad()) // 如果地图点不存在或已失效
+            continue;
+
+        // 获取地图点的在原始世界坐标系下的位置
+        Eigen::Vector3f Xw = pMP->GetWorldPos();
+
+        // 计算地图点在棋盘格坐标系下的坐标
+        // Pw_new = Tcb.rotationMatrix() * Pw_orig + Tcb.translation()
+        Eigen::Vector3f Pw_new = Tcb.rotationMatrix() * Pw_orig + Tcb.translation();
+        
+        // 更新地图点位置
+        pMP->SetWorldPos(Pw_new);
+        
+        // 更新地图点的法线方向和深度范围
+        pMP->UpdateNormalAndDepth();
+    }
+    
+
+}
+
+
+
+
+
+
+
 //! 创建初始化地图------------------------------------------------------------
 /**
  * @brief 创建初始地图，使用棋盘格角点作为特征点
@@ -2722,7 +2811,7 @@ void Tracking::Track()
     }
 
     // Step 5 初始化
-    if(mState==NOT_INITIALIZED)
+    if(mState==NOT_INITIALIZED) // 如果没有初始化，开始初始化
     {
         if(mSensor==System::STEREO || mSensor==System::RGBD || mSensor==System::IMU_STEREO || mSensor==System::IMU_RGBD)
         {
@@ -2754,9 +2843,10 @@ void Tracking::Track()
     {
         // System is initialized. Track Frame.
         // Step 6 系统成功初始化，下面是具体跟踪过程
-        bool bOK;
+        bool bOK; // 跟踪是否成功
 
 #ifdef REGISTER_TIMES
+        // 用于记录初始姿态预测的开始时间，仅在REGISTER_TIMES宏被定义时有效，便于性能监控。
         std::chrono::steady_clock::time_point time_StartPosePred = std::chrono::steady_clock::now();
 #endif
 
@@ -2873,7 +2963,7 @@ void Tracking::Track()
                 }
                 else if (mState == LOST)  // 上一帧为最近丢失且重定位失败时
                 {
-                    // Step 6.6 如果是LOST状态
+                    //! Step 6.6 如果是LOST状态-----------------------------
                     // 开启一个新地图
                     Verbose::PrintMess("A new map is started...", Verbose::VERBOSITY_NORMAL);
 
@@ -3230,7 +3320,29 @@ void Tracking::Track()
                 if(mCurrentFrame.mvpMapPoints[i] && mCurrentFrame.mvbOutlier[i])
                     mCurrentFrame.mvpMapPoints[i]=static_cast<MapPoint*>(NULL);
             }
+
+            // 🌟 在这里添加检查是否需要应用棋盘格坐标系转换的代码
+            //! 检查是否需要应用棋盘格坐标系转换----------------------------------------
+            if (mbUseChessboardInit && mbHasChessboardPosed && !mbChessboardInitialized && mState == OK)
+            {
+                // 检查地图是否已经初始化
+                Map* pCurrentMap = mpAtlas->GetCurrentMap();
+                if (pCurrentMap && pCurrentMap->KeyFramesInMap() >= 2)
+                {
+                    std::cout << "🌍 检测到系统已完成初始化，应用棋盘格坐标系转换..." << std::endl;
+                    
+                    // 应用坐标系转换
+                    TransformAllMapElements(mTcw_Chessboard, mTwc_chessboard);
+                    
+                    // 标记已完成棋盘格初始化
+                    mbChessboardInitialized = true;
+                    std::cout << "✅ 棋盘格坐标系转换完成！" << std::endl;
+                }
+            }
         }
+
+
+
 
         // Reset if the camera get lost soon after initialization
         // Step 10 如果第二阶段跟踪失败，跟踪状态为LOST
@@ -4253,14 +4365,7 @@ bool Tracking::TrackLocalMap()
         // 🎯 针对棋盘格初始化的特殊处理：如果地图点总数很少（比如棋盘格初始化），降低跟踪成功的阈值
         int totalMapPoints = mpAtlas->MapPointsInMap();
         int minMatches = 30; // 默认阈值
-
-        if (totalMapPoints <= 15) {
-            // 如果地图点总数很少（比如棋盘格初始化的9个点），大幅降低阈值
-            minMatches = max(3, totalMapPoints / 3); // 至少3个，或者总数的1/3
-            std::cout << "🎯 棋盘格模式：降低跟踪阈值至 " << minMatches << " 个匹配点（总地图点数: " << totalMapPoints << "）" << std::endl;
-        }
-
-        //以上情况都不满足，只要跟踪的地图点大于阈值就认为成功了
+        
         if(mnMatchesInliers < minMatches)
             return false;
         else

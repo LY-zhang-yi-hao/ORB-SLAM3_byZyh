@@ -366,6 +366,8 @@ protected:
     bool ComputePoseFromChessboard(const std::vector<cv::Point2f> &corners, cv::Mat &Tcw,std::vector<cv::Point3f> &worldPoints);
     //! 使用棋盘格检测的角点进行初始化，得 离线世界坐标系
     void CreateInitialMapWithChessboard(const std::vector<cv::Point3f> &worldPoints , const std::vector<cv::Point2f> &imagePoints);
+    //! 添加坐标系转换函数声明
+    void TransformAllMapElements(const Sophus::SE3f &Tcw_chess, const Sophus::SE3f &Twc_chess);
     //! 棋盘格初始化主函数
     bool InitializeWithChessboard(const cv::Mat &mImGray);
 
@@ -373,9 +375,18 @@ protected:
     cv::Size mChessboardSize; // 棋盘格内角点数目
     float mSquareSize; // 棋盘格方块大小
     float mStartX, mStartY, mZHeight; // 棋盘格在世界坐标系中的位置
+    
     bool mbUseChessboardInit; // 是否使用棋盘格初始化
+    bool mbHasChessboardPosed; // 标记是否已经完成棋盘格位姿计算
     bool mbChessboardInitialized; // 标记是否已经完成棋盘格初始化
+    bool mbShouldApplyChessboardTransform; // 重新初始化后是否应用棋盘格变换
 
+    Sophus::SE3f mTcw_Chessboard; // 棋盘格位姿
+    Sophus::SE3f mTwc_chessboard; // 相机坐标系到棋盘格世界坐标系的变换（逆变换）
+    Sophus::SE3f mSavedTcw_chessboard; // 保存的棋盘格位姿（用于重新初始化）
+    Sophus::SE3f mSavedTwc_chessboard; // 保存的棋盘格位姿逆变换
+
+    
 
 #ifdef REGISTER_LOOP
     bool Stop();
