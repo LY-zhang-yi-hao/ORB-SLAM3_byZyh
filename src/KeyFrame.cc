@@ -133,7 +133,7 @@ void KeyFrame::SetVelocity(const Eigen::Vector3f &Vw)
     mbHasVelocity = true;
 }
 
-// 获取位姿
+// 获取位姿 Tcw 世界坐标系下到相机坐标系的变换
 Sophus::SE3f KeyFrame::GetPose()
 {
     unique_lock<mutex> lock(mMutexPose);

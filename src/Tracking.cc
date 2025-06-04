@@ -28,6 +28,7 @@
 #include "KannalaBrandt8.h"
 #include "MLPnPsolver.h"
 #include "GeometricTools.h"
+#include <sophus/se3.hpp>
 
 #include <iostream>
 
@@ -69,7 +70,9 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mbOnlyTracking(false), mbMapUpdated(false), mbVO(false), mpORBVocabulary(pVoc), mpKeyFrameDB(pKFDB),
     mbReadyToInitializate(false), mpSystem(pSys), mpViewer(NULL), bStepByStep(false),
     mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpAtlas(pAtlas), mnLastRelocFrameId(0), time_recently_lost(5.0),
-    mnInitialFrameId(0), mbCreatedMap(false), mnFirstFrameId(0), mpCamera2(nullptr), mpLastKeyFrame(static_cast<KeyFrame*>(NULL))
+    mnInitialFrameId(0), mbCreatedMap(false), mnFirstFrameId(0), mpCamera2(nullptr), 
+    mT_custom_orb(Sophus::SE3f()),         // 初始化 mT_custom_orb 为单位变换 (Identity SE3)
+    mpLastKeyFrame(static_cast<KeyFrame*>(NULL))    // 移除了mpPoseObservers的初始化，因为现在使用vector
 {
     // Load camera parameters from settings file
     // Step 1 从配置文件中加载相机参数
@@ -121,6 +124,11 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     initID = 0; lastID = 0;
     mbInitWith3KFs = false;
     mnNumDataset = 0;
+
+    std::cout << "Tracking constructor: mvpPoseObservers initialized as empty list" << std::endl;
+    std::cout << "Tracking constructor: mT_custom_orb initialized to (translation): "
+    << mT_custom_orb.translation().transpose() << std::endl;
+
 
     // 遍历下地图中的相机，然后打印出来了
     vector<GeometricCamera*> vpCams = mpAtlas->GetAllCameras();
@@ -204,6 +212,35 @@ double calcDeviation(vector<int> v_values, double average)
         total++;
     }
     return sqrt(accum / total);
+}
+
+// 注册一个位姿观察者对象，用于在Tracking模块计算出新的相机位姿后，
+//! 将该位姿（已转换到用户自定义的世界坐标系）通知给外部模块。
+void Tracking::RegisterPoseObserver(IPoseObserver* pObserver)
+{
+    // 使用互斥锁保护多线程访问
+    std::unique_lock<std::mutex> lock(mMutexPoseAccess);
+    
+    // 检查观察者是否已经存在
+    auto it = std::find(mvpPoseObservers.begin(), mvpPoseObservers.end(), pObserver);
+    if (it == mvpPoseObservers.end()) {
+        // 如果不存在，则添加到列表中
+        mvpPoseObservers.push_back(pObserver);
+    }
+}
+
+// 取消注册位姿观察者对象
+void Tracking::UnregisterPoseObserver(IPoseObserver* pObserver)
+{
+    // 使用互斥锁保护多线程访问
+    std::unique_lock<std::mutex> lock(mMutexPoseAccess);
+    
+    // 查找并移除观察者
+    auto it = std::find(mvpPoseObservers.begin(), mvpPoseObservers.end(), pObserver);
+    if (it != mvpPoseObservers.end()) {
+        // 如果找到了，从列表中移除
+        mvpPoseObservers.erase(it);
+    }
 }
 
 void Tracking::LocalMapStats2File()
@@ -1498,7 +1535,33 @@ void Tracking::SetViewer(Viewer *pViewer)
     mpViewer=pViewer;
 }
 
-// 一步一步进行
+void Tracking::RegisterPoseObserver(IPoseObserver* pObserver) {
+    std::unique_lock<std::mutex> lock(mMutexPoseAccess);    
+    // 检查观察者是否已经存在
+    auto it = std::find(mvpPoseObservers.begin(), mvpPoseObservers.end(), pObserver);
+    if (it == mvpPoseObservers.end()) {
+        // 如果不存在，则添加到列表中
+        mvpPoseObservers.push_back(pObserver);
+    }
+}
+
+void Tracking::UnregisterPoseObserver(IPoseObserver* pObserver) {
+    std::unique_lock<std::mutex> lock(mMutexPoseAccess);    
+    // 从列表中移除观察者
+    auto it = std::find(mvpPoseObservers.begin(), mvpPoseObservers.end(), pObserver);
+    if (it != mvpPoseObservers.end()) {
+        mvpPoseObservers.erase(it);
+    }
+}
+
+void Tracking::SetCustomWorldTransform(const Sophus::SE3f& T_custom_orb) {
+    std::unique_lock<std::mutex> lock(mMutexPoseAccess);
+    mT_custom_orb = T_custom_orb;
+    
+    std::cout << "Tracking constructor: mT_custom_orb initialized to (translation): " 
+              << mT_custom_orb.translation().transpose() << std::endl;
+}
+
 void Tracking::SetStepByStep(bool bSet)
 {
     bStepByStep = bSet;
@@ -2421,8 +2484,28 @@ void Tracking::Track()
         // 由上图可知当前帧的状态OK的条件是跟踪局部地图成功，重定位或正常跟踪都可
         // Step 8 根据上面的操作来判断是否追踪成功
         if(bOK)
+
+        
+        {
             // 此时还OK才说明跟踪成功了
             mState = OK;
+            // 如果有注册的位姿观察者，并且当前状态是OK，则通知所有观察者
+            if(!mvpPoseObservers.empty())
+            {
+                // 计算转换到自定义世界坐标系的位姿
+                Sophus::SE3f Twc = mCurrentFrame.GetPose();
+                Sophus::SE3f Tcw = Twc.inverse();
+                Sophus::SE3f T_custom_current = mT_custom_orb * Tcw;
+                
+                // 遍历并通知所有观察者
+                std::unique_lock<std::mutex> lock(mMutexPoseAccess);
+                for(auto pObserver : mvpPoseObservers) {
+                    if(pObserver) {
+                        pObserver->OnPoseUpdated(T_custom_current, mCurrentFrame.mTimeStamp);
+                    }
+                }
+            }
+        }
         else if (mState == OK)  // 由上图可知只有当第一阶段跟踪成功，但第二阶段局部地图跟踪失败时执行
         {
             // 状态变为最近丢失

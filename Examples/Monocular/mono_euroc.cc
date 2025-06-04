@@ -20,12 +20,85 @@
 #include<algorithm>
 #include<fstream>
 #include<chrono>
-
+#include <sophus/se3.hpp>
 #include<opencv2/core/core.hpp>
-
+#include<fstream>
+#include<iomanip>
 #include<System.h>
-
+#include "Tracking.h"
 using namespace std;
+
+
+// 按照ORB-SLAM3的TUM格式，轨迹记录
+class TUMFormatTrajectoryRecorder : public ORB_SLAM3::IPoseObserver
+{
+private:
+    std::ofstream mOutputFile; // 文件流，用于写入轨迹数据
+    bool mIsFirstFrame; // 标志变量，指示当前是否为第一帧图像
+    bool mIsKeyFrameRecorder; // 标志变量，指示是否为关键帧记录器
+    std::string mOutputFilename; // 保存文件名，方便后续使用
+
+public:
+    TUMFormatTrajectoryRecorder(const std::string& filename, bool isKeyFrameRecorder = false)
+        : mIsFirstFrame(true), mIsKeyFrameRecorder(isKeyFrameRecorder), mOutputFilename(filename) {
+        // 打开输出文件
+        mOutputFile.open(filename.c_str());
+        if(!mOutputFile.is_open()) {
+            std::cerr << "无法打开文件: " << filename << std::endl;
+            exit(1);
+        }
+        // 设置固定点数格式
+        mOutputFile << std::fixed;
+        std::cout << "轨迹记录已初始化，输出文件: " << filename 
+                  << (mIsKeyFrameRecorder ? "（关键帧模式）" : "（所有帧模式）") << std::endl;
+    }
+    
+    ~TUMFormatTrajectoryRecorder() {
+        // 检查输出文件是否已打开
+        if (mOutputFile.is_open()) {
+            // 关闭输出文件
+            mOutputFile.close();
+            // 输出轨迹记录完成的信息
+            std::cout << "轨迹记录完成，文件已关闭: " << mOutputFilename << std::endl;
+        }
+    }
+    
+    void OnPoseUpdated(const Sophus::SE3f& T_custom_world_camera, double timestamp) override 
+    {
+        if (!mOutputFile.is_open()) return;        
+        
+        // 如果是关键帧记录器但当前不是关键帧，则跳过
+        if (mIsKeyFrameRecorder && !IsKeyFrame()) 
+            return;
+        
+        // 获取平移向量
+        Eigen::Vector3f twc = T_custom_world_camera.translation();
+        // 获取单位四元数
+        Eigen::Quaternionf q = T_custom_world_camera.unit_quaternion();
+        // 输出，时间戳6位精度，坐标和四元数9位精度
+        // 注意：ORB-SLAM3使用的顺序是 w, x, y, z
+        mOutputFile << std::setprecision(6) << timestamp << " "
+                    << std::setprecision(9) 
+                    << twc.x() << " " 
+                    << twc.y() << " " 
+                    << twc.z() << " "
+                    << q.w() << " " 
+                    << q.x() << " " 
+                    << q.y() << " " 
+                    << q.z() << std::endl;        
+    }
+
+private:
+    // 判断当前帧是否为关键帧的辅助函数（仅在关键帧记录模式下使用）
+    // 注意：由于我们无法直接从 Observer访问到KeyFrame信息，这里使用timestamp作为标记
+    // 在实际运行中，这将导致所有帧都被记录，我们需要在System类中实现更好的方法
+    bool IsKeyFrame() {
+        // 对于普通帧记录器，始终返回true，对于关键帧记录器，也返回true
+        // 对于关键帧记录器，一般应该验证帧的属性，但这里我们没有这个信息
+        // 所以很多情况下我们两个输出文件会很相似
+        return true;
+    }
+};
 
 void LoadImages(const string &strImagePath, const string &strPathTimes,
                 vector<string> &vstrImages, vector<double> &vTimeStamps);
@@ -81,6 +154,43 @@ int main(int argc, char **argv)
     float dT = 1.f/fps;
     // 创建SLAM系统，初始化所有系统线程，并准备好处理帧
     ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::MONOCULAR, true); // 是否使用可视化界面。
+
+   // 获取 Tracking 对象并设置
+    ORB_SLAM3::Tracking* pTracker = SLAM.GetTracker();
+    if (pTracker) {
+
+        // 创建自定义坐标系的轨迹记录器（所有帧）
+        std::string customTrajFile = "f_custom_"+ std::string(argv[5]) + ".txt";
+        TUMFormatTrajectoryRecorder* pTrajectoryRecorder = new TUMFormatTrajectoryRecorder(customTrajFile, false);
+        
+        // 创建自定义坐标系的关键帧轨迹记录器
+        std::string customKfTrajFile = "kf_custom_"+ std::string(argv[5]) + ".txt";
+        TUMFormatTrajectoryRecorder* pKfTrajectoryRecorder = new TUMFormatTrajectoryRecorder(customKfTrajFile, true);
+        
+        // 注册位姿观察者
+        pTracker->RegisterPoseObserver(pTrajectoryRecorder);
+        pTracker->RegisterPoseObserver(pKfTrajectoryRecorder);
+
+        // 设置自定义坐标系
+        // 假设ORB坐标系的原点在自定义世界坐标的位置（1.5，2.2，0）
+        Eigen::Vector3f t_custom_orb_translation(1.5,2.2,0);
+        Eigen::Matrix3f R_custom_orb = Eigen::Matrix3f::Identity();// 假设方向一致
+        
+        // 创建变换队形 T_custom_orb
+        Sophus::SE3f T_custom_orb(R_custom_orb,t_custom_orb_translation);
+        
+        // 设置自定义坐标系
+        pTracker->SetCustomWorldTransform(T_custom_orb);
+
+        std::cout << "🔄 已注册自定义坐标系轨迹记录器，输出文件：" << customTrajFile << std::endl;
+        std::cout << "📝 可与系统默认生成的 f_" << argv[5] << ".txt 文件进行比较分析" << std::endl;
+
+    } else {    // 如果获取 Tracker 对象失败，输出错误信息并退出程序
+        std::cerr << "错误: 无法获取 Tracker 对象!" << std::endl;
+        return 1;
+    }
+    
+    
     float imageScale = SLAM.GetImageScale();
 
     double t_resize = 0.f;

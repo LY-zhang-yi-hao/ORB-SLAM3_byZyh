@@ -192,6 +192,11 @@ public:
     void InsertTrackTime(double& time);
 #endif
 
+    // 获取Tracking对象的指针
+    Tracking* GetTracker() {
+        return mpTracker;
+    }
+
 private:
 
     void SaveAtlas(int type);

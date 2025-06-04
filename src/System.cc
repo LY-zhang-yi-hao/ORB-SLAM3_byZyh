@@ -67,7 +67,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     else if(mSensor==STEREO)
         cout << "Stereo" << endl;                // 双目
     else if(mSensor==RGBD)
-        cout << "RGB-D" << endl;                 // RGBD相机   
+        cout << "RGB-D" << endl;                 // RGBD相机
     else if(mSensor==IMU_MONOCULAR)
         cout << "Monocular-Inertial" << endl;    // 单目 + imu
     else if(mSensor==IMU_STEREO)
@@ -431,7 +431,7 @@ Sophus::SE3f System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const
 
 /**
  * @brief 单目/单目VIO跟踪
- * 
+ *
  * @param[in] im                灰度图像
  * @param[in] timestamp         图像时间戳
  * @param[in] vImuMeas          上一帧到当前帧图像之间的IMU测量值
