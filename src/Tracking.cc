@@ -1535,6 +1535,7 @@ void Tracking::SetViewer(Viewer *pViewer)
     mpViewer=pViewer;
 }
 
+// 注册观察者
 void Tracking::RegisterPoseObserver(IPoseObserver* pObserver) {
     std::unique_lock<std::mutex> lock(mMutexPoseAccess);    
     // 检查观察者是否已经存在
@@ -1545,6 +1546,7 @@ void Tracking::RegisterPoseObserver(IPoseObserver* pObserver) {
     }
 }
 
+// 移除观察者
 void Tracking::UnregisterPoseObserver(IPoseObserver* pObserver) {
     std::unique_lock<std::mutex> lock(mMutexPoseAccess);    
     // 从列表中移除观察者
@@ -1553,7 +1555,7 @@ void Tracking::UnregisterPoseObserver(IPoseObserver* pObserver) {
         mvpPoseObservers.erase(it);
     }
 }
-
+// 设置自定义世界坐标系
 void Tracking::SetCustomWorldTransform(const Sophus::SE3f& T_custom_orb) {
     std::unique_lock<std::mutex> lock(mMutexPoseAccess);
     mT_custom_orb = T_custom_orb;
@@ -2034,7 +2036,7 @@ void Tracking::ResetFrameIMU()
 void Tracking::Track()
 {
 
-    if (bStepByStep)
+    if (bStepByStep)// 是否步进跟踪
     {
         std::cout << "Tracking: Waiting to the next step" << std::endl;
         while(!mbStep && bStepByStep)
