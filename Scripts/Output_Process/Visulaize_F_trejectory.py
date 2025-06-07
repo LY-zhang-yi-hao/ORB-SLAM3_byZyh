@@ -33,6 +33,7 @@ def setup_chinese_font():
 
 def create_output_directories():
     """Create output directories"""
+    #! 输出目录
     output_dir = "trajectory_visualization_output"
     plots_dir = os.path.join(output_dir, "plots")
     data_dir = os.path.join(output_dir, "data")
@@ -286,7 +287,7 @@ def main():
     output_dir, plots_dir, data_dir = create_output_directories()
     
     # File path (only need the full trajectory file)
-    trajectory_file = "/home/zyh/Desktop/ORB-SLAM3_byZyh/f_custom_dataset_name.txt"
+    trajectory_file = "/home/zyh/Desktop/ORB-SLAM3_byZyh/f_Track_custom_dataset_name.txt"
     
     try:
         # Load data

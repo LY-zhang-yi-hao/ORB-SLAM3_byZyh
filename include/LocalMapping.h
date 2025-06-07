@@ -20,6 +20,7 @@
 #ifndef LOCALMAPPING_H
 #define LOCALMAPPING_H
 
+#include "IPoseObserver.h"
 #include "KeyFrame.h"
 #include "Atlas.h"
 #include "LoopClosing.h"
@@ -53,6 +54,7 @@ public:
 
     void InsertKeyFrame(KeyFrame* pKF);
     void EmptyQueue();
+    void NotifyOptimizedPose(KeyFrame* pKF); //通知优化后的位姿
 
     // Thread Synch
     void RequestStop();

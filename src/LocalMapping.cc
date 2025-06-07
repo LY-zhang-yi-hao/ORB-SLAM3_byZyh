@@ -23,6 +23,8 @@
 #include "Optimizer.h"
 #include "Converter.h"
 #include "GeometricTools.h"
+#include "Tracking.h"
+#include "IPoseObserver.h"
 
 #include<mutex>
 #include<chrono>
@@ -100,7 +102,7 @@ void LocalMapping::Run()
     while(1)
     {
         // Tracking will see that Local Mapping is busy
-        // Step 1 告诉Tracking，LocalMapping正处于繁忙状态，请不要给我发送关键帧打扰我
+    //todo Step 1 告诉Tracking，LocalMapping正处于繁忙状态，请不要给我发送关键帧打扰我
         // LocalMapping线程处理的关键帧都是Tracking线程发过来的
         SetAcceptKeyFrames(false);
 
@@ -115,7 +117,7 @@ void LocalMapping::Run()
             std::chrono::steady_clock::time_point time_StartProcessKF = std::chrono::steady_clock::now();
 #endif
             // BoW conversion and insertion in Map
-            // Step 2 处理列表中的关键帧，包括计算BoW、更新观测、描述子、共视图，插入到地图等
+    //todo Step 2 处理列表中的关键帧，包括计算BoW、更新观测、描述子、共视图，插入到地图等
             ProcessNewKeyFrame();
 #ifdef REGISTER_TIMES
             std::chrono::steady_clock::time_point time_EndProcessKF = std::chrono::steady_clock::now();
@@ -125,7 +127,7 @@ void LocalMapping::Run()
 #endif
 
             // Check recent MapPoints
-            // Step 3 根据地图点的观测情况剔除质量不好的地图点
+    //todo Step 3 根据地图点的观测情况剔除质量不好的地图点
             MapPointCulling();
 #ifdef REGISTER_TIMES
             std::chrono::steady_clock::time_point time_EndMPCulling = std::chrono::steady_clock::now();
@@ -135,7 +137,7 @@ void LocalMapping::Run()
 #endif
 
             // Triangulate new MapPoints
-            // Step 4 当前关键帧与相邻关键帧通过三角化产生新的地图点，使得跟踪更稳
+    //todo Step 4 当前关键帧与相邻关键帧通过三角化产生新的地图点，使得跟踪更稳
             CreateNewMapPoints();
 
             // 注意orbslam2中放在了函数SearchInNeighbors（用到了mbAbortBA）后面，应该放这里更合适
@@ -145,7 +147,7 @@ void LocalMapping::Run()
             if(!CheckNewKeyFrames())
             {
                 // Find more matches in neighbor keyframes and fuse point duplications
-                //  Step 5 检查并融合当前关键帧与相邻关键帧帧（两级相邻）中重复的地图点
+    //todo Step 5 检查并融合当前关键帧与相邻关键帧帧（两级相邻）中重复的地图点
                 // 先完成相邻关键帧与当前关键帧的地图点的融合（在相邻关键帧中查找当前关键帧的地图点），
                 // 再完成当前关键帧与相邻关键帧的地图点的融合（在当前关键帧中查找当前相邻关键帧的地图点）
                 SearchInNeighbors();
@@ -164,13 +166,13 @@ void LocalMapping::Run()
             int num_MPs_BA = 0;
             int num_edges_BA = 0;
 
-            // 已经处理完队列中的最后的一个关键帧，并且闭环检测没有请求停止LocalMapping
+    //todo Step 6 已经处理完队列中的最后的一个关键帧，并且闭环检测没有请求停止LocalMapping
             if(!CheckNewKeyFrames() && !stopRequested())
             {
                 // 当前地图中关键帧数目大于2个
                 if(mpAtlas->KeyFramesInMap()>2)
                 {
-                    // Step 6.1 处于IMU模式并且当前关键帧所在的地图已经完成IMU初始化
+                    //? Step 6.1 处于IMU模式并且当前关键帧所在的地图已经完成IMU初始化
                     if(mbInertial && mpCurrentKeyFrame->GetMap()->isImuInitialized())
                     {
                         // 计算上一关键帧到当前关键帧相机光心的距离 + 上上关键帧到上一关键帧相机光心的距离
@@ -201,18 +203,51 @@ void LocalMapping::Run()
                     }
                     else
                     {
-                        // Step 6.2 不是IMU模式或者当前关键帧所在的地图还未完成IMU初始化
-						// 局部地图BA，不包括IMU数据
+                        //? Step 6.2 不是IMU模式或者当前关键帧所在的地图还未完成IMU初始化
+						//! 局部地图BA，不包括IMU数据
 						// 注意这里的第二个参数是按地址传递的,当这里的 mbAbortBA 状态发生变化时，能够及时执行/停止BA
                         // 局部地图优化，不包括IMU信息。优化关键帧位姿、地图点
                         Optimizer::LocalBundleAdjustment(mpCurrentKeyFrame,&mbAbortBA, mpCurrentKeyFrame->GetMap(),num_FixedKF_BA,num_OptKF_BA,num_MPs_BA,num_edges_BA);
-                        b_doneLBA = true;
+                        b_doneLBA = true;                        
                     }
 
-                }
+                    // Local Bundle Adjustment / Inertial BA finished
+                    if (b_doneLBA && !mbAbortBA) // 确保LBA成功且未被中断
+                    {
+                        
+                        if (mpCurrentKeyFrame && !mpCurrentKeyFrame->isBad())
+                        {
+                            NotifyOptimizedPose(mpCurrentKeyFrame);
+                        }
+                        else
+                        {
+                            std::cout << "[LocalMapping::Run] mpCurrentKeyFrame is "
+                                      << (mpCurrentKeyFrame ? (mpCurrentKeyFrame->isBad() ? "bad" : "valid but not notified") : "nullptr")
+                                      << ". Skipping NotifyOptimizedPose." << std::endl;
+                        }
+                    }
+                    else if (b_doneLBA && mbAbortBA)
+                    {
+                        std::cout << "[LocalMapping::Run] LBA/InertialBA was aborted. No notification." << std::endl;
+                    }
+                    else
+                    {
+                        std::cout << "[LocalMapping::Run] LBA/InertialBA was not performed or did not complete. No notification." << std::endl;
+                    }
+
+                } // This closes if(mpAtlas->KeyFramesInMap()>2)
 #ifdef REGISTER_TIMES
                 std::chrono::steady_clock::time_point time_EndLBA = std::chrono::steady_clock::now();
-
+        
+                // 如果BA成功完成,插入通知逻辑
+                if (b_doneLBA && !mbAbortBA)
+                {
+                    if (mpCurrentKeyFrame && !mpCurrentKeyFrame->isBad())
+                    {
+                        NotifyOptimizedPose(mpCurrentKeyFrame); //
+                    }
+                }
+        
                 if(b_doneLBA)
                 {
                     timeLBA_ms = std::chrono::duration_cast<std::chrono::duration<double,std::milli> >(time_EndLBA - time_EndMPCreation).count();
@@ -228,11 +263,13 @@ void LocalMapping::Run()
                     vnLBA_KFfixed.push_back(num_FixedKF_BA);
                     vnLBA_MPs.push_back(num_MPs_BA);
                 }
+            
+
 
 #endif
 
                 // Initialize IMU here
-                // Step 7 当前关键帧所在地图未完成IMU初始化（第一阶段）
+    //todo Step 7 当前关键帧所在地图未完成IMU初始化（第一阶段）
                 if(!mpCurrentKeyFrame->GetMap()->isImuInitialized() && mbInertial)
                 {
                     // 在函数InitializeIMU里设置IMU成功初始化标志 SetImuInitialized
@@ -246,7 +283,7 @@ void LocalMapping::Run()
 
                 // Check redundant local Keyframes
                 // 跟踪中关键帧插入条件比较松，交给LocalMapping线程的关键帧会比较密，这里再删除冗余
-                // Step 8 检测并剔除当前帧相邻的关键帧中冗余的关键帧
+    // todo Step 8 检测并剔除当前帧相邻的关键帧中冗余的关键帧
                 // 冗余的判定：该关键帧的90%的地图点可以被其它关键帧观测到
                 KeyFrameCulling();
 
@@ -256,7 +293,7 @@ void LocalMapping::Run()
                 timeKFCulling_ms = std::chrono::duration_cast<std::chrono::duration<double,std::milli> >(time_EndKFCulling - time_EndLBA).count();
                 vdKFCulling_ms.push_back(timeKFCulling_ms);
 #endif
-                // Step 9 如果距离IMU第一阶段初始化成功累计时间差小于100s，进行VIBA
+    //todo Step 9 如果距离IMU第一阶段初始化成功累计时间差小于100s，进行VIBA
                 if ((mTinit<50.0f) && mbInertial)
                 {
                     // Step 9.1 根据条件判断是否进行VIBA1（IMU第二次初始化）
@@ -314,7 +351,7 @@ void LocalMapping::Run()
             vdLBASync_ms.push_back(timeKFCulling_ms);
             vdKFCullingSync_ms.push_back(timeKFCulling_ms);
 #endif
-            // Step 10 将当前帧加入到闭环检测队列中
+    //todo Step 10 将当前帧加入到闭环检测队列中
             mpLoopCloser->InsertKeyFrame(mpCurrentKeyFrame);
 
 #ifdef REGISTER_TIMES
@@ -354,6 +391,31 @@ void LocalMapping::Run()
     SetFinish();
 }
 
+// 通知所有观察者
+void LocalMapping::NotifyOptimizedPose(KeyFrame *pKF)
+{
+    // 检查 mpTracker 和 观察者列表是否有效；
+    if (mpTracker && !mpTracker->mvpPoseObservers.empty())
+    {
+        std::unique_lock<std::mutex> lock_observers(mpTracker->mMutexPoseAccess);
+        // 使用互斥锁
+        for (IPoseObserver* pObserver : mpTracker->mvpPoseObservers)
+        {
+            if (pObserver)
+            {
+                // 获取优化后的位姿
+                const Sophus::SE3f& Twc = pKF->GetPoseInverse();
+                // 坐标转换：
+                // 1. Twc: 世界坐标系到相机坐标系的变换
+                // 2. mpTracker->mT_custom_orb: 自定义坐标系到世界坐标系的变换
+                // 3. mpTracker->mT_custom_orb * Twc: 自定义坐标系到相机坐标系的变换
+                Sophus::SE3f T_custom_world_camera = mpTracker->mT_custom_orb * Twc;
+                // 调用优化位姿的方法
+                pObserver->OnOptimizedPoseUpdated(T_custom_world_camera,pKF->mTimeStamp);
+            }
+        }
+    }
+}
 /**
  * @brief 插入关键帧,由外部（Tracking）线程调用;这里只是插入到列表中,等待线程主函数对其进行处理
  * @param pKF 新的关键帧

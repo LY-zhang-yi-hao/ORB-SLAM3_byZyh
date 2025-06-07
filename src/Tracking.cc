@@ -2503,7 +2503,7 @@ void Tracking::Track()
                 std::unique_lock<std::mutex> lock(mMutexPoseAccess);
                 for(auto pObserver : mvpPoseObservers) {
                     if(pObserver) {
-                        pObserver->OnPoseUpdated(T_custom_current, mCurrentFrame.mTimeStamp);
+                        pObserver->OnRealTimePoseUpdated(T_custom_current, mCurrentFrame.mTimeStamp);
                     }
                 }
             }

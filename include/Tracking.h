@@ -23,6 +23,7 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/features2d/features2d.hpp>
 
+#include "IPoseObserver.h"
 #include "Viewer.h"
 #include "FrameDrawer.h"
 #include "Atlas.h"
@@ -53,31 +54,6 @@ class LocalMapping;
 class LoopClosing;
 class System;
 class Settings;
-
-
-/**
- * @brief 位姿观察者接口 (Interface for Pose Observer)
- *
- * 该接口定义了一个回调函数 OnPoseUpdated，用于在 Tracking 模块计算出新的相机位姿后，
- * 将该位姿（已转换到用户自定义的世界坐标系）通知给外部模块。
- * 外部模块可以实现此接口来接收更新后的位姿信息。
- */
-class IPoseObserver 
-{
-public:
-    /**
-     * @brief 虚析构函数 (Virtual destructor)
-     * 确保通过基类指针删除派生类对象时能够正确调用派生类的析构函数。
-     */
-    virtual ~IPoseObserver() = default;
-    
-    /**
-     * @brief 当新的位姿可用时被调用 (Called when a new pose is available)
-     * @param T_custom_world_camera 相机在用户自定义世界坐标系下的位姿 (SE3 transform: pose of the camera in the custom world coordinate system)
-     *                              通常是 Sophus::SE3f 类型。
-     */
-    virtual void OnPoseUpdated(const Sophus::SE3f& T_custom_world_camera,double timestamp) = 0; // 
-};
 
 
 class Tracking
@@ -146,6 +122,12 @@ public:
 
 
     float GetImageScale();
+    // For pose estimation thread
+    std::mutex mMutexPoseUpdate;
+    
+    // 位姿观察者列表 - 支持多个观察者
+    std::mutex mMutexPoseAccess;
+    std::vector<IPoseObserver*> mvpPoseObservers; // 改为观察者列表
 
 #ifdef REGISTER_LOOP
     void RequestStop();
@@ -399,14 +381,7 @@ protected:
 
     void newParameterLoader(Settings* settings);
 
-    // For pose estimation thread
-    std::mutex mMutexPoseUpdate;
-    
-    // 自定义坐标系相关变量已在上面声明
 
-    // 位姿观察者列表 - 支持多个观察者
-    std::mutex mMutexPoseAccess;
-    std::vector<IPoseObserver*> mvpPoseObservers; // 改为观察者列表
 
 #ifdef REGISTER_LOOP
     bool Stop();

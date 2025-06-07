@@ -25,6 +25,7 @@
 #include<fstream>
 #include<iomanip>
 #include<System.h>
+#include <IPoseObserver.h>
 #include "Tracking.h"
 using namespace std;
 
@@ -33,70 +34,79 @@ using namespace std;
 class TUMFormatTrajectoryRecorder : public ORB_SLAM3::IPoseObserver
 {
 private:
-    std::ofstream mOutputFile; // 文件流，用于写入轨迹数据
-    bool mIsFirstFrame; // 标志变量，指示当前是否为第一帧图像
-    bool mIsKeyFrameRecorder; // 标志变量，指示是否为关键帧记录器
-    std::string mOutputFilename; // 保存文件名，方便后续使用
+    std::ofstream mRealTimePoseFile;    // 文件流，用于写入实时位姿数据
+    std::ofstream mOptimizedPoseFile; // 文件流，用于写入优化后的位姿数据
+    std::string mRealTimeFilename_str;  // 保存实时位姿文件名，用于析构函数消息
+    std::string mOptimizedFilename_str; // 保存优化位姿文件名，用于析构函数消息
 
 public:
-    TUMFormatTrajectoryRecorder(const std::string& filename, bool isKeyFrameRecorder = false)
-        : mIsFirstFrame(true), mIsKeyFrameRecorder(isKeyFrameRecorder), mOutputFilename(filename) {
-        // 打开输出文件
-        mOutputFile.open(filename.c_str());
-        if(!mOutputFile.is_open()) {
-            std::cerr << "无法打开文件: " << filename << std::endl;
+    TUMFormatTrajectoryRecorder(const std::string& realTimePoseFilename, const std::string& optimizedPoseFilename)
+        : mRealTimeFilename_str(realTimePoseFilename), mOptimizedFilename_str(optimizedPoseFilename)
+    {
+        mRealTimePoseFile.open(realTimePoseFilename.c_str());
+        if(!mRealTimePoseFile.is_open()) {
+            std::cerr << "无法打开文件: " << realTimePoseFilename << std::endl;
             exit(1);
         }
-        // 设置固定点数格式
-        mOutputFile << std::fixed;
-        std::cout << "轨迹记录已初始化，输出文件: " << filename 
-                  << (mIsKeyFrameRecorder ? "（关键帧模式）" : "（所有帧模式）") << std::endl;
+        mOptimizedPoseFile.open(optimizedPoseFilename.c_str());
+        if (!mOptimizedPoseFile.is_open()) {
+            std::cerr << "无法打开文件: " << optimizedPoseFilename << std::endl;
+            exit(1);
+        }
+        mRealTimePoseFile << std::fixed;
+        mOptimizedPoseFile << std::fixed;
+        std::cout << "轨迹记录器已初始化。\n实时位姿将输出到: " << mRealTimeFilename_str 
+                  << "\n优化位姿将输出到: " << mOptimizedFilename_str << std::endl;
     }
     
     ~TUMFormatTrajectoryRecorder() {
-        // 检查输出文件是否已打开
-        if (mOutputFile.is_open()) {
-            // 关闭输出文件
-            mOutputFile.close();
-            // 输出轨迹记录完成的信息
-            std::cout << "轨迹记录完成，文件已关闭: " << mOutputFilename << std::endl;
+        if (mRealTimePoseFile.is_open()) {
+            mRealTimePoseFile.close();
+            std::cout << "实时位姿轨迹记录完成，文件已关闭: " << mRealTimeFilename_str << std::endl;
+        }
+        if (mOptimizedPoseFile.is_open()) {
+            mOptimizedPoseFile.close();
+            std::cout << "优化位姿轨迹记录完成，文件已关闭: " << mOptimizedFilename_str << std::endl;
         }
     }
-    
-    void OnPoseUpdated(const Sophus::SE3f& T_custom_world_camera, double timestamp) override 
+
+    // 实现来自 Tracking 的实时位姿回调
+    void OnRealTimePoseUpdated(const Sophus::SE3f& T_custom_world_camera, double timestamp) override 
     {
-        if (!mOutputFile.is_open()) return;        
-        
-        // 如果是关键帧记录器但当前不是关键帧，则跳过
-        if (mIsKeyFrameRecorder && !IsKeyFrame()) 
-            return;
-        
-        // 获取平移向量
+        if (!mRealTimePoseFile.is_open()) return;            
+       
         Eigen::Vector3f twc = T_custom_world_camera.translation();
-        // 获取单位四元数
         Eigen::Quaternionf q = T_custom_world_camera.unit_quaternion();
-        // 输出，时间戳6位精度，坐标和四元数9位精度
-        // 注意：ORB-SLAM3使用的顺序是 w, x, y, z
-        mOutputFile << std::setprecision(6) << timestamp << " "
-                    << std::setprecision(9) 
-                    << twc.x() << " " 
-                    << twc.y() << " " 
-                    << twc.z() << " "
-                    << q.w() << " " 
-                    << q.x() << " " 
-                    << q.y() << " " 
-                    << q.z() << std::endl;        
+        mRealTimePoseFile << std::setprecision(6) << timestamp << " "
+                          << std::setprecision(9) 
+                          << twc.x() << " " 
+                          << twc.y() << " " 
+                          << twc.z() << " "
+                          << q.w() << " " 
+                          << q.x() << " " 
+                          << q.y() << " " 
+                          << q.z() << std::endl;        
     }
 
-private:
-    // 判断当前帧是否为关键帧的辅助函数（仅在关键帧记录模式下使用）
-    // 注意：由于我们无法直接从 Observer访问到KeyFrame信息，这里使用timestamp作为标记
-    // 在实际运行中，这将导致所有帧都被记录，我们需要在System类中实现更好的方法
-    bool IsKeyFrame() {
-        // 对于普通帧记录器，始终返回true，对于关键帧记录器，也返回true
-        // 对于关键帧记录器，一般应该验证帧的属性，但这里我们没有这个信息
-        // 所以很多情况下我们两个输出文件会很相似
-        return true;
+    // 实现来自 LocalMapping 的优化位姿回调
+    void OnOptimizedPoseUpdated(const Sophus::SE3f& T_custom_world_camera, double timestamp) override {
+        std::cout << "TUMFormatTrajectoryRecorder: OnOptimizedPoseUpdated CALLED. Timestamp: " << std::fixed << std::setprecision(12) << timestamp << std::endl;
+        if(!mOptimizedPoseFile.is_open()) {
+            std::cerr << "TUMFormatTrajectoryRecorder: OnOptimizedPoseUpdated - Optimized pose file is not open!" << std::endl;
+            return;
+        }
+
+        Eigen::Vector3f twc = T_custom_world_camera.translation();
+        Eigen::Quaternionf q = T_custom_world_camera.unit_quaternion();
+        mOptimizedPoseFile << std::setprecision(6) << timestamp << " "
+                           << std::setprecision(9) 
+                           << twc.x() << " " 
+                           << twc.y() << " " 
+                           << twc.z() << " "
+                           << q.w() << " " 
+                           << q.x() << " " 
+                           << q.y() << " " 
+                           << q.z() << std::endl;   
     }
 };
 
@@ -159,17 +169,13 @@ int main(int argc, char **argv)
     ORB_SLAM3::Tracking* pTracker = SLAM.GetTracker();
     if (pTracker) {
 
-        // 创建自定义坐标系的轨迹记录器（所有帧）
-        std::string customTrajFile = "f_custom_"+ std::string(argv[5]) + ".txt";
-        TUMFormatTrajectoryRecorder* pTrajectoryRecorder = new TUMFormatTrajectoryRecorder(customTrajFile, false);
+        // 创建通用轨迹记录器实例，用于记录实时位姿和优化位姿
+        std::string realTimeTrajFile = "f_Track_custom_" + std::string(argv[5]) + ".txt";
+        std::string optimizedTrajFile = "f_Optimized_custom_" + std::string(argv[5]) + ".txt";
+        TUMFormatTrajectoryRecorder* pTrajectoryRecorder = new TUMFormatTrajectoryRecorder(realTimeTrajFile, optimizedTrajFile);
         
-        // 创建自定义坐标系的关键帧轨迹记录器
-        std::string customKfTrajFile = "kf_custom_"+ std::string(argv[5]) + ".txt";
-        TUMFormatTrajectoryRecorder* pKfTrajectoryRecorder = new TUMFormatTrajectoryRecorder(customKfTrajFile, true);
-        
-        // 注册位姿观察者
+        // 注册这一个位姿观察者实例
         pTracker->RegisterPoseObserver(pTrajectoryRecorder);
-        pTracker->RegisterPoseObserver(pKfTrajectoryRecorder);
 
         // 设置自定义坐标系
         // 假设ORB坐标系的原点在自定义世界坐标的位置（1.5，2.2，0）
@@ -182,7 +188,7 @@ int main(int argc, char **argv)
         // 设置自定义坐标系
         pTracker->SetCustomWorldTransform(T_custom_orb);
 
-        std::cout << "🔄 已注册自定义坐标系轨迹记录器，输出文件：" << customTrajFile << std::endl;
+        // 轨迹记录器的构造函数会打印初始化信息，此处不再重复打印
         std::cout << "📝 可与系统默认生成的 f_" << argv[5] << ".txt 文件进行比较分析" << std::endl;
 
     } else {    // 如果获取 Tracker 对象失败，输出错误信息并退出程序
